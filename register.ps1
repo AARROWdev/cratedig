@@ -1,10 +1,19 @@
-# Installs the portable build to %LOCALAPPDATA%\Programs\Cratedig and registers it with Windows
+# Installs the portable build to C:\Program Files\Cratedig and registers it with Windows
 # so it shows up in "Open with" and Settings > Default apps for every audio/video type.
-# Per-user only (HKCU), no admin needed. Run again after a rebuild to update the installed copy.
+# Associations are per-user (HKCU). Copying into Program Files needs admin: the script asks via UAC.
+# Run again after a rebuild to update the installed copy.
 param([string]$Source = "$PSScriptRoot\build\dist\Cratedig")
 $ErrorActionPreference = 'Stop'
 
-$dest = Join-Path $env:LOCALAPPDATA 'Programs\Cratedig'
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) {
+    $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Source', "`"$Source`"")
+    exit $p.ExitCode
+}
+
+$dest = Join-Path $env:ProgramFiles 'Cratedig'
 Get-Process Cratedig -ErrorAction SilentlyContinue | Stop-Process -Force
 if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
 Copy-Item $Source $dest -Recurse
