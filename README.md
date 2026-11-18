@@ -36,7 +36,7 @@ The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn
 - Folder tree on the left, big file list in the middle
 - Columns: **name, type, length, size, date**. Click one to sort; folders always stay on top.
 - **Length** of every audio and video file, filled in on a background thread so the window never waits
-- Names sort exactly like Explorer, so `Track 2` comes before `Track 10`
+- Names sort like Explorer, so `Track 2` comes before `Track 10`
 - **Filter as you type** (Ctrl+F), back / forward / up, editable address bar (Ctrl+L)
 - Right-click: Play from here, Show in Explorer, Copy Full Path
 
@@ -82,16 +82,16 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 Cratedig remembers your last folder, window size, column layout, volume, view and skin. It only ever reads your media; it never writes to it.
 
 ## Tested in a throwaway Windows
-`tests/` holds 97 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: every supported audio and video type, portrait and landscape video, video without audio, corrupt and empty files.
+`tests/` holds 97 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
 
 - **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
-- **Single instance:** five rapid launches from Windows end up as one window, even when Cratedig was closed
+- **Single instance:** five rapid launches from Windows all hand their file to the one open window
 - **Length column:** every type within 1 second of the real length; 2,000 files fill in without the window stalling
 - **Playback:** sort order, next/prev/seek/pause/stop, corrupt files skipped, all 6 waveform views, the video layouts and fullscreen, high DPI at 100/150/200 %
 - **Robustness:** a random click-and-key monkey test (4,500 steps during playback) that fails if the window stops responding for 2 seconds, folders deleted out from under the window, garbage settings
 - **Never writes to your media:** every test file is hashed before and after the whole run
 
-Release bar: every check passes **3 full runs in a row**. Getting there found 4 real bugs (Esc not clearing the filter, a bad setting crashing startup, typing `C:` opening the wrong folder, uninstall leaving a registry key). A separate AI code review then checked the code against a written spec over 4 passes and found 37 more, 14 of them serious: several files opened at once from Explorer starting several players, an `ffmpeg.exe` planted in a music folder getting run, crashes on unusual file names and dates, and the filter failing on any space. All fixed and covered by a test.
+Release bar: every check passes **3 full runs in a row**. Getting there found 4 real bugs (Esc not clearing the filter, a bad setting crashing startup, typing `C:` opening the wrong folder, uninstall leaving a registry key). A separate AI code review then checked the code against a written spec over 4 passes and found 37 more, 14 of them serious: several files opened at once from Explorer starting several players, an `ffmpeg.exe` planted in a music folder getting run, crashes on unusual file names and dates, and the filter failing on any space. All fixed; most have a regression test.
 
 ## Build
 ```
