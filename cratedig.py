@@ -1,8 +1,9 @@
-"""Cratedig v0.1 - file explorer + media player in one window."""
+"""Cratedig - file explorer + media player in one window."""
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -10,8 +11,9 @@ LIB = os.path.join(HERE, "lib")
 os.environ["PATH"] = LIB + os.pathsep + HERE + os.pathsep + os.environ.get("PATH", "")
 
 import mpv  # noqa: E402
-from PySide6.QtCore import (QAbstractTableModel, QDir, QFileInfo, QModelIndex, QSettings,  # noqa: E402
-                            QSortFilterProxyModel, Qt, QTimer)
+from PySide6.QtCore import (QAbstractTableModel, QDir, QFileInfo, QModelIndex, QObject, QSettings,  # noqa: E402
+                            QSortFilterProxyModel, Qt, QTimer, Signal)
+from PySide6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut  # noqa: E402
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileIconProvider,  # noqa: E402
                                QFileSystemModel, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -22,7 +24,7 @@ import themes  # noqa: E402
 from waveform import MODES, Analyzer, WaveView  # noqa: E402
 
 APP = "Cratedig"
-VERSION = "1.0"
+VERSION = "1.1"
 
 AUDIO = {"wav", "mp3", "flac", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus", "wma", "alac",
          "ape", "wv", "mka", "mid", "midi"}
@@ -51,12 +53,69 @@ def fmt_time(sec):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+DUR_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+
+
+def probe_duration(path):
+    """Seconds, or -1 if unknown. mutagen first (fast, reads headers only), ffmpeg as fallback."""
+    try:
+        import mutagen
+        f = mutagen.File(path)
+        if f is not None and getattr(f, "info", None) and getattr(f.info, "length", 0):
+            return float(f.info.length)
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path], capture_output=True, text=True,
+                           errors="replace", timeout=15, creationflags=NO_WINDOW)
+        m = DUR_RE.search(r.stderr)
+        if m:
+            h, mi, s = m.groups()
+            return int(h) * 3600 + int(mi) * 60 + float(s)
+    except Exception:
+        pass
+    return -1.0
+
+
+class DurationWorker(QObject):
+    """Reads track lengths for one folder on a background thread; results arrive in batches."""
+    found = Signal(int, list)   # generation, [(path, seconds)]
+    cache = {}                  # (path, size, mtime) -> seconds, shared across folders
+
+    def __init__(self):
+        super().__init__()
+        self.gen = 0
+
+    def start(self, entries):
+        self.gen += 1
+        gen = self.gen
+        todo = [(e.path, e.size, e.mtime) for e in entries if e.media]
+        threading.Thread(target=self.run, args=(gen, todo), daemon=True).start()
+
+    def run(self, gen, todo):
+        batch, last = [], time.monotonic()
+        for key in todo:
+            if gen != self.gen:
+                return
+            sec = self.cache.get(key)
+            if sec is None:
+                sec = self.cache[key] = probe_duration(key[0])
+            batch.append((key[0], sec))
+            if len(batch) >= 200 or time.monotonic() - last > 0.25:
+                self.found.emit(gen, batch)
+                batch, last = [], time.monotonic()
+        if batch and gen == self.gen:
+            self.found.emit(gen, batch)
+
+
 class Entry:
-    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key")
+    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur")
 
     def __init__(self, de):
         self.name = de.name
         self.path = de.path
+        self.dur = None
         try:
             self.is_dir = de.is_dir()
             st = de.stat()
@@ -79,11 +138,14 @@ class Entry:
 
 
 class DirModel(QAbstractTableModel):
-    COLS = ["Name", "Type", "Size", "Date modified"]
+    COLS = ["Name", "Type", "Length", "Size", "Date modified"]
 
     def __init__(self):
         super().__init__()
         self.entries = []
+        self.rows = {}
+        self.durs = DurationWorker()
+        self.durs.found.connect(self.set_durations)
         self.playing = None
         self.accent = QColor("#2f9bff")
         self.icons = QFileIconProvider()
@@ -105,8 +167,24 @@ class DirModel(QAbstractTableModel):
         except OSError as e:
             err = str(e)
         self.entries = items
+        self.rows = {e.path: i for i, e in enumerate(items)}
         self.endResetModel()
+        self.durs.start(items)
         return err
+
+    def set_durations(self, gen, batch):
+        if gen != self.durs.gen:
+            return
+        lo, hi = None, None
+        for path, sec in batch:
+            r = self.rows.get(path)
+            if r is None:
+                continue
+            self.entries[r].dur = sec
+            lo = r if lo is None else min(lo, r)
+            hi = r if hi is None else max(hi, r)
+        if lo is not None:
+            self.dataChanged.emit(self.index(lo, 2), self.index(hi, 2))
 
     def icon_for(self, e):
         k = "<dir>" if e.is_dir else e.ext
@@ -143,12 +221,14 @@ class DirModel(QAbstractTableModel):
             if c == 1:
                 return e.type_label
             if c == 2:
-                return "" if e.is_dir else human_size(e.size)
+                return fmt_time(e.dur) if e.dur and e.dur > 0 else ""
             if c == 3:
+                return "" if e.is_dir else human_size(e.size)
+            if c == 4:
                 return time.strftime("%Y-%m-%d %H:%M", time.localtime(e.mtime)) if e.mtime else ""
         elif role == Qt.DecorationRole and c == 0:
             return self.icon_for(e)
-        elif role == Qt.TextAlignmentRole and c == 2:
+        elif role == Qt.TextAlignmentRole and c in (2, 3):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         elif role == Qt.ToolTipRole and c == 0:
             return e.path
@@ -166,8 +246,8 @@ class SortProxy(QSortFilterProxyModel):
         if a.is_dir != b.is_dir:
             return a.is_dir == (self.sortOrder() == Qt.AscendingOrder)
         c = left.column()
-        ka = {1: a.ext, 2: a.size, 3: a.mtime}.get(c)
-        kb = {1: b.ext, 2: b.size, 3: b.mtime}.get(c)
+        ka = {1: a.ext, 2: a.dur or 0, 3: a.size, 4: a.mtime}.get(c)
+        kb = {1: b.ext, 2: b.dur or 0, 3: b.size, 4: b.mtime}.get(c)
         if ka is not None and ka != kb:
             return ka < kb
         return a.key < b.key
@@ -271,7 +351,8 @@ class Window(QMainWindow):
         hdr.setSectionResizeMode(0, QHeaderView.Interactive)
         hdr.resizeSection(0, 420)
         hdr.resizeSection(1, 110)
-        hdr.resizeSection(2, 90)
+        hdr.resizeSection(2, 70)
+        hdr.resizeSection(3, 90)
         self.proxy.layoutChanged.connect(self.update_status)
 
         # --- toolbar row
@@ -425,7 +506,7 @@ class Window(QMainWindow):
             st = self.settings.value(key)
             if st:
                 sp.restoreState(st)
-        hs = self.settings.value("header")
+        hs = self.settings.value("header5")   # 5 columns since Length was added; old 4-column state is ignored
         if hs:
             hdr.restoreState(hs)
         self.vol.setValue(int(self.settings.value("volume", 80)))
@@ -446,6 +527,22 @@ class Window(QMainWindow):
         self.navigate(start_dir)
         if start_file:
             self.play_view(start_file)
+
+    def open_remote(self, arg):
+        """A second launch (e.g. double-clicking a file in Windows Explorer) hands its file here
+        instead of starting another player."""
+        if self.full_hidden is not None:
+            self.toggle_full()
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if arg and os.path.isfile(arg):
+            path = os.path.abspath(arg)
+            self.navigate(os.path.dirname(path))
+            self.play_view(path)
+        elif arg and os.path.isdir(arg):
+            self.navigate(arg)
 
     # ---------- helpers
     def tbtn(self, icon, tip, fn):
@@ -757,7 +854,7 @@ class Window(QMainWindow):
         s.setValue("geometry", self.saveGeometry())
         s.setValue("hsplit", self.hsplit.saveState())
         s.setValue("vsplit", self.vsplit.saveState())
-        s.setValue("header", self.list.header().saveState())
+        s.setValue("header5", self.list.header().saveState())
         s.setValue("volume", self.vol.value())
         if self.cwd:
             s.setValue("last_dir", self.cwd)
@@ -781,12 +878,60 @@ def install_error_log():
     sys.excepthook = hook
 
 
+SERVER = f"{APP}-{os.environ.get('USERNAME', 'user')}"
+
+
+def hand_off(arg):
+    """If Cratedig is already running, pass it our file or folder and return True."""
+    sock = QLocalSocket()
+    sock.connectToServer(SERVER)
+    if not sock.waitForConnected(500):
+        return False
+    try:
+        import ctypes
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)   # let the running window come to the front
+    except Exception:
+        pass
+    sock.write((os.path.abspath(arg) if arg else "").encode("utf-8") + b"\n")
+    sock.flush()
+    sock.waitForBytesWritten(1000)
+    sock.disconnectFromServer()
+    return True
+
+
+def serve(window):
+    server = QLocalServer(window)
+    QLocalServer.removeServer(SERVER)   # clears a stale name left by a crash
+    server.listen(SERVER)
+
+    def on_conn():
+        conn = server.nextPendingConnection()
+        buf = bytearray()
+
+        def read():
+            buf.extend(bytes(conn.readAll()))
+            if b"\n" in buf:
+                arg = buf.split(b"\n", 1)[0].decode("utf-8", "replace")
+                conn.disconnectFromServer()
+                window.open_remote(arg)
+        conn.readyRead.connect(read)
+        conn.disconnected.connect(conn.deleteLater)
+        if conn.bytesAvailable():
+            read()
+    server.newConnection.connect(on_conn)
+    return server
+
+
 def main():
     install_error_log()
     app = QApplication(sys.argv)
     app.setApplicationName(APP)
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    if hand_off(arg):
+        sys.exit(0)
     themes.apply(app, themes.get(QSettings(APP, APP).value("skin", themes.DEFAULT)))
-    w = Window(sys.argv[1] if len(sys.argv) > 1 else None)
+    w = Window(arg)
+    w.server = serve(w)
     w.show()
     sys.exit(app.exec())
 
