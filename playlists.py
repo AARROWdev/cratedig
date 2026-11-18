@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtCore import QStandardPaths, Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 EXT = ".m3u8"
@@ -68,17 +68,11 @@ def read(path):
         line = line.strip()
         if not line or line.startswith("#") or "\x00" in line:
             continue
-        if line.lower().startswith("file:"):
-            # convert only when it's lossless (an unencoded "#" or "?" would cut the path short; bad %-escapes
-            # turn into U+FFFD); otherwise keep the line exactly. No disk access here: the GUI thread reads this.
-            local = None if ("#" in line or "?" in line) else QUrl(line).toLocalFile()
-            if local and "\ufffd" not in local:
-                out.append(os.path.normpath(local if os.path.isabs(local) else os.path.join(base, local)))
-            else:
-                out.append(line)
-            continue
-        if "://" in line:
-            out.append(line)   # a stream URL: shown as missing, written back unchanged
+        if line.lower().startswith("file:") or "://" in line:
+            # file: links and stream URLs are kept exactly as written (shown as missing, written back unchanged).
+            # Converting file: URLs safely has too many lossy edge cases (%00, localhost, file://D:/, folders),
+            # and a playlist line must never come back changed.
+            out.append(line)
             continue
         p = line if os.path.isabs(line) else os.path.join(base, line)
         out.append(os.path.normpath(p))

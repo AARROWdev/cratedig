@@ -290,7 +290,7 @@ class DirModel(QAbstractTableModel):
     def mimeData(self, indexes):
         rows = sorted({ix.row() for ix in indexes if ix.isValid() and not self.entries[ix.row()].is_dir})
         md = QMimeData()
-        md.setUrls([QUrl.fromLocalFile(self.entries[r].path) for r in rows])
+        md.setUrls([QUrl.fromLocalFile(self.entries[r].path) for r in rows if not self.entries[r].missing])
         if self.pl_mode:
             md.setData(self.ROWS_MIME, ",".join(map(str, rows)).encode())
         return md

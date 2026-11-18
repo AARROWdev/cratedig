@@ -353,7 +353,7 @@ def test_v5_w1_w8_encodings_urls_and_file_urls(make_window, media, tmp_path):
     assert w.open_playlist("U16")
     w.add_to_playlist("U16", [os.path.join(d, "tone mp3.mp3")])
     got = pl.read(pl.path_for("U16"))
-    assert got[0] == url and got[1] == os.path.normpath(song) and got[2] == a   # file:/// became a path (W8)
+    assert got[0] == url and got[1] == os.path.normpath(song) and got[2] == QUrl.fromLocalFile(a).toString()   # file: kept verbatim
     ansi = r"C:\Música\canción.mp3".encode("cp1252")
     raw = b"#EXTM3U\n" + ansi + b"\n"
     with open(pl.path_for("Ansi"), "wb") as f:   # not UTF-8: refused, never rewritten (W1)
@@ -508,16 +508,20 @@ def test_x5_no_access_is_not_called_missing(monkeypatch, tmp_path):
 
 # ---------- 1.2 review pass 4 (Y1-Y3, flags)
 
-def test_y1_y3_file_urls_lossless_or_verbatim(tmp_path):
-    base = str(tmp_path)
+def test_z_file_links_always_kept_verbatim(tmp_path):
+    """Z1-Z4: no file: line is ever converted, so none can come back changed (NUL, newline, localhost,
+    file://D:/, folders and roots included)."""
     p = str(tmp_path / "x.m3u8")
     lines = ["file:///D:/Music/a%20b.mp3", "file:/C:/Music/a.mp3", "file://nas/music/a.mp3", "file:rel.mp3",
-             "file:///D:/Music/Track #1.mp3", "file:///D:/x%AB.mp3", "file:///D:/a?b.mp3"]
+             "file:///D:/Music/Track #1.mp3", "file:///D:/x%AB.mp3", "file:///D:/a?b.mp3", "file:///D:/a%00b.mp3",
+             "file:///D:/a%0Ab.mp3", "file://localhost/C:/Music/a.mp3", "file://D:/Music/a.mp3", "file:///D:/Music/",
+             "file:///", "FILE:///D:/x.mp3"]
     with open(p, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n" + "\n".join(lines) + "\n")
-    assert pl.read(p) == [os.path.normpath("D:/Music/a b.mp3"), os.path.normpath("C:/Music/a.mp3"),
-                          "\\\\nas\\music\\a.mp3", os.path.join(base, "rel.mp3"),
-                          lines[4], lines[5], lines[6]]
+    got = pl.read(p)
+    assert got == lines
+    pl.write(p, got)
+    assert pl.read(p) == lines   # round-trips byte for byte
 
 
 def test_y2_file_lines_never_touch_the_disk(tmp_path, monkeypatch):
@@ -527,6 +531,7 @@ def test_y2_file_lines_never_touch_the_disk(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(pl.os.path, "isfile", lambda q: calls.append(q) or False)
     monkeypatch.setattr(pl.os.path, "exists", lambda q: calls.append(q) or False)
+    monkeypatch.setattr(pl.os, "stat", lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(OSError()))
     pl.read(p)
     assert calls == []
 
@@ -553,3 +558,17 @@ def test_flags_drag_and_drop():
     assert not m.flags(QModelIndex()) & Qt.ItemIsDropEnabled
     m.pl_mode = True
     assert m.flags(QModelIndex()) & Qt.ItemIsDropEnabled and m.flags(m.index(0, 0)) & Qt.ItemIsDropEnabled
+
+
+
+def test_z5_missing_rows_drag_no_urls(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone wav.wav")
+    pl.write(pl.path_for("Z5"), ["file:///D:/gone.mp3", a, os.path.join(d, "gone.mp3")])
+    w.pl_list.refresh()
+    w.open_playlist("Z5")
+    m = w.model
+    md = m.mimeData([m.index(r, 0) for r in range(3)])
+    assert [os.path.normpath(u.toLocalFile()) for u in md.urls()] == [a]
+    assert bytes(md.data(m.ROWS_MIME)) == b"0,1,2"   # reordering still moves every row
