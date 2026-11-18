@@ -504,3 +504,52 @@ def test_x5_no_access_is_not_called_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(cd.PathEntry, "stat", denied)
     e = cd.Entry(cd.PathEntry(str(tmp_path / "a.mp3")))
     assert e.missing and e.why == "no access"
+
+
+# ---------- 1.2 review pass 4 (Y1-Y3, flags)
+
+def test_y1_y3_file_urls_lossless_or_verbatim(tmp_path):
+    base = str(tmp_path)
+    p = str(tmp_path / "x.m3u8")
+    lines = ["file:///D:/Music/a%20b.mp3", "file:/C:/Music/a.mp3", "file://nas/music/a.mp3", "file:rel.mp3",
+             "file:///D:/Music/Track #1.mp3", "file:///D:/x%AB.mp3", "file:///D:/a?b.mp3"]
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n" + "\n".join(lines) + "\n")
+    assert pl.read(p) == [os.path.normpath("D:/Music/a b.mp3"), os.path.normpath("C:/Music/a.mp3"),
+                          "\\\\nas\\music\\a.mp3", os.path.join(base, "rel.mp3"),
+                          lines[4], lines[5], lines[6]]
+
+
+def test_y2_file_lines_never_touch_the_disk(tmp_path, monkeypatch):
+    p = str(tmp_path / "x.m3u8")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\nfile://deadnas/music/a.mp3\nfile:///D:/Track #1.mp3\n")
+    calls = []
+    monkeypatch.setattr(pl.os.path, "isfile", lambda q: calls.append(q) or False)
+    monkeypatch.setattr(pl.os.path, "exists", lambda q: calls.append(q) or False)
+    pl.read(p)
+    assert calls == []
+
+
+def test_y3_unreadable_file_link_is_labelled(tmp_path):
+    e = cd.Entry(cd.PathEntry("file:///D:/Track #1.mp3"))
+    assert e.missing and e.why == "file link Cratedig can't read"
+
+
+def test_flags_drag_and_drop():
+    m = cd.DirModel()
+    class DE:
+        def __init__(self, name, d):
+            self.name, self.path, self._d = name, "C:\\x\\" + name, d
+        def is_dir(self):
+            return self._d
+        def stat(self):
+            return os.stat_result((0,) * 10)
+    m.beginResetModel()
+    m.set_entries([cd.Entry(DE("f.mp3", False)), cd.Entry(DE("sub", True))])
+    f, d = m.flags(m.index(0, 0)), m.flags(m.index(1, 0))
+    assert f & Qt.ItemIsDragEnabled and not d & Qt.ItemIsDragEnabled
+    assert f & Qt.ItemIsSelectable and f & Qt.ItemIsEnabled
+    assert not m.flags(QModelIndex()) & Qt.ItemIsDropEnabled
+    m.pl_mode = True
+    assert m.flags(QModelIndex()) & Qt.ItemIsDropEnabled and m.flags(m.index(0, 0)) & Qt.ItemIsDropEnabled

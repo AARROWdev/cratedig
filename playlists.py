@@ -69,10 +69,14 @@ def read(path):
         if not line or line.startswith("#") or "\x00" in line:
             continue
         if line.lower().startswith("file:"):
-            local = QUrl(line).toLocalFile()   # an unencoded "#" or "?" would cut the path short:
-            if local and os.path.isfile(local):   # use it only when it names a real file, else keep the line
-                out.append(os.path.normpath(local))
-                continue
+            # convert only when it's lossless (an unencoded "#" or "?" would cut the path short; bad %-escapes
+            # turn into U+FFFD); otherwise keep the line exactly. No disk access here: the GUI thread reads this.
+            local = None if ("#" in line or "?" in line) else QUrl(line).toLocalFile()
+            if local and "\ufffd" not in local:
+                out.append(os.path.normpath(local if os.path.isabs(local) else os.path.join(base, local)))
+            else:
+                out.append(line)
+            continue
         if "://" in line:
             out.append(line)   # a stream URL: shown as missing, written back unchanged
             continue

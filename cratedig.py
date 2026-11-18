@@ -142,13 +142,18 @@ class DurationWorker(QObject):
             self.finished.emit(gen)
 
 
+def is_link(p):
+    """A playlist line kept as written (a stream URL or a file: link that couldn't be converted), not a path."""
+    return "://" in p or p.lower().startswith("file:")
+
+
 class PathEntry:
     """os.DirEntry look-alike for a path from a playlist (which may no longer exist)."""
 
     def __init__(self, path, dead=False):
         self.path = path
-        self.name = os.path.basename(path.rstrip("/")) if "://" in path else os.path.basename(path)
-        self.dead = dead or "://" in path
+        self.name = os.path.basename(path.rstrip("/")) if is_link(path) else os.path.basename(path)
+        self.dead = dead or is_link(path)
 
     def is_dir(self):
         return False
@@ -177,7 +182,8 @@ class Entry:
             self.is_dir, self.size, self.mtime = False, 0, 0
             self.missing = isinstance(de, PathEntry)
             if self.missing:
-                self.why = ("stream, not a file" if "://" in de.path else
+                self.why = ("file link Cratedig can't read" if de.path.lower().startswith("file:") else
+                            "stream, not a file" if "://" in de.path else
                             "drive or share not reachable" if de.dead else
                             "file not found" if isinstance(ex, FileNotFoundError) else
                             "no access" if isinstance(ex, PermissionError) else
@@ -236,10 +242,10 @@ class DirModel(QAbstractTableModel):
         return err
 
     def load_playlist(self, paths):
-        roots = dirs_alive({os.path.splitdrive(p)[0] + "\\" for p in paths if "://" not in p}, 2.0)
+        roots = dirs_alive({os.path.splitdrive(p)[0] + "\\" for p in paths if not is_link(p)}, 2.0)
         self.beginResetModel()
         self.pl_mode = True
-        self.set_entries([Entry(PathEntry(p, dead="://" not in p and not roots[os.path.splitdrive(p)[0] + "\\"]))
+        self.set_entries([Entry(PathEntry(p, dead=not is_link(p) and not roots[os.path.splitdrive(p)[0] + "\\"]))
                           for p in paths])
 
     def set_entries(self, items, reset=False):
@@ -1227,7 +1233,7 @@ class Window(QMainWindow):
             self.statusBar().showMessage("A copy is already running", 4000)
             return None
         try:
-            paths = [p for p in playlists.read(playlists.path_for(name)) if "://" not in p]
+            paths = [p for p in playlists.read(playlists.path_for(name)) if not is_link(p)]
         except OSError as e:
             self.statusBar().showMessage(f"Can't read {name}: {e.strerror or e}", 8000)
             return None
