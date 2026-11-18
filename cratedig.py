@@ -39,9 +39,20 @@ def natural_key(s):
     return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", s.casefold())]   # isdecimal: '²' isn't an int
 
 
+try:   # Explorer's own name order ("Disc.mp3" before "Disc2.mp3", "Song - live" before "Song")
+    import ctypes
+    import functools
+    _cmp = ctypes.windll.shlwapi.StrCmpLogicalW
+    _cmp.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
+    _cmp.restype = ctypes.c_int
+    _logical = functools.cmp_to_key(_cmp)
+except (ImportError, AttributeError, OSError):
+    _logical = natural_key
+
+
 def sort_key(name):
-    # a tuple, not one list: appended to the list, "Demo" vs "Demo2" would compare the name with a number
-    return (natural_key(name), unicodedata.normalize("NFC", name).casefold())   # "é.mp3" vs "e.mp3": no tie
+    # (Explorer order, then the exact name): "é.mp3" vs "e.mp3" never tie
+    return (_logical(name), unicodedata.normalize("NFC", name).casefold())
 
 
 def human_size(n):

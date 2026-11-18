@@ -226,5 +226,10 @@ def test_p3_1_name_sort_in_window(make_window, tmp_path):
         open(os.path.join(d, n), "wb").close()
     w = make_window(d)
     w.list.sortByColumn(0, cd.Qt.AscendingOrder)
-    got = [e.name for e in w.view_entries()]
-    assert got[:2] == ["Demo", "Demo2"] and sorted(got[2:]) == ["Disc.mp3", "Disc2.mp3", "a.mp3"]
+    assert [e.name for e in w.view_entries()] == ["Demo", "Demo2", "a.mp3", "Disc.mp3", "Disc2.mp3"]
+
+
+def test_p4_name_order_matches_explorer():
+    """OOS-1: the same order as Explorer (StrCmpLogicalW), checked against Explorer by the reviewer."""
+    want = ["Disc.mp3", "Disc2.mp3", "Song - live.mp3", "Song.mp3", "Song2.mp3", "Song10.mp3", "Track 2.wav", "Track 10.wav"]
+    assert sorted(reversed(want), key=cd.sort_key) == want
