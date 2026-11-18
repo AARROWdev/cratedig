@@ -78,6 +78,7 @@ def test_folder_deleted_while_shown_and_playing(make_window, media, tmp_path):
     w = make_window(d)
     w.play_view(os.path.join(d, "tone flac.flac"))
     h.wait_until(lambda: w.cur_path, 20, "playing")
+    h.wait_until(lambda: h.lengths_done(w), 60, "lengths filled")   # a probe holds its file open, so rmtree would fail
     w.stop()
     h.pump(300)
     shutil.rmtree(d)

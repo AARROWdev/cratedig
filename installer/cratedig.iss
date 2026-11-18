@@ -7,7 +7,7 @@
 #endif
 
 #define ProgId "Cratedig.Media"
-#define Exts "wav mp3 flac aiff aif m4a aac ogg oga opus wma alac ape wv mka mid midi mp4 mkv mov avi webm wmv m4v flv mpg mpeg ts m2ts 3gp vob ogv"
+#define Exts "wav mp3 flac aiff aif m4a aac ogg oga opus wma alac ape wv mka mp4 mkv mov avi webm wmv m4v flv mpg mpeg ts m2ts 3gp vob ogv"
 
 [Setup]
 AppId={{6F1B7E0A-2C4D-4E8B-9A61-5D3C2B8F7E14}

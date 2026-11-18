@@ -47,12 +47,13 @@ def test_length_sort(media):
 
 
 def test_cache_reused(media, monkeypatch):
-    """A second visit doesn't probe again."""
-    loaded(media[0])
+    """A second visit doesn't probe again (only files whose first probe failed are retried)."""
+    m = loaded(media[0])
+    failed = {e.path for e in m.entries if e.media and e.dur is not None and e.dur < 0}
     calls = []
     monkeypatch.setattr(cd, "probe_duration", lambda p: calls.append(p) or 1.0)
     loaded(media[0])
-    assert calls == []
+    assert set(calls) == failed
 
 
 def test_changed_file_is_probed_again(media, tmp_path):

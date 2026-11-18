@@ -85,7 +85,7 @@ Cratedig remembers your last folder, window size, column layout, volume, view an
 `tests/` holds 75 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: every supported audio and video type, portrait and landscape video, video without audio, corrupt and empty files.
 
 - **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
-- **Single instance:** five rapid launches from Windows end up as one window playing the last file
+- **Single instance:** five rapid launches from Windows end up as one window, even when Cratedig was closed
 - **Length column:** every type within 1 second of the real length; 2,000 files fill in without the window stalling
 - **Playback:** sort order, next/prev/seek/pause/stop, corrupt files skipped, all 6 waveform views, the video layouts and fullscreen, high DPI at 100/150/200 %
 - **Robustness:** a random click-and-key monkey test (4,500 steps during playback) that fails if the window stops responding for 2 seconds, folders deleted out from under the window, garbage settings

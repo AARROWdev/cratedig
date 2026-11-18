@@ -78,16 +78,17 @@ class Analyzer(QObject):
         self.lock = threading.Lock()
 
     def request(self, path):
+        job = object()   # a fresh token per request: a replay of the same path must not revive a killed run
         with self.lock:
-            self.job = path
+            self.job = job
             if self.proc and self.proc.poll() is None:
                 self.proc.kill()
-        threading.Thread(target=self._run, args=(path,), daemon=True).start()
+        threading.Thread(target=self._run, args=(path, job), daemon=True).start()
 
-    def _current(self, path):
-        return self.job == path
+    def _current(self, job):
+        return self.job is job
 
-    def _run(self, path):
+    def _run(self, path, job):
         try:
             key = cache_key(path)
         except OSError:
@@ -108,7 +109,7 @@ class Analyzer(QObject):
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=flags)
         with self.lock:
-            if not self._current(path):
+            if not self._current(job):
                 proc.kill()
                 return
             self.proc = proc
@@ -120,7 +121,7 @@ class Analyzer(QObject):
         chunk = RATE * 4 * 5  # 5 s
         while True:
             data = proc.stdout.read(chunk)
-            if not self._current(path):
+            if not self._current(job):
                 proc.kill()
                 return
             if not data:
@@ -150,7 +151,7 @@ class Analyzer(QObject):
                 last_emit = time.time()
                 self.progress.emit(path, self._pack(peaks, rmss, specs, False))
         proc.wait()
-        if not self._current(path):
+        if not self._current(job):
             return
         if not peaks:
             self.progress.emit(path, Analysis(np.zeros((0, 2, 2), np.float32), np.zeros((0, 2), np.float32),
@@ -158,6 +159,8 @@ class Analyzer(QObject):
             return
         res = self._pack(peaks, rmss, specs, True)
         self.progress.emit(path, res)
+        if proc.returncode != 0:   # killed or failed part-way: don't cache a truncated waveform
+            return
         try:
             pk = np.concatenate(peaks)
             np.savez_compressed(cf, peaks=pk, rms=np.concatenate(rmss), spec=res.spec)
@@ -235,7 +238,9 @@ class WaveView(QWidget):
         except Exception:
             return
         changed = abs(pos - self.pos) > 1e-3 or dur != self.dur
-        self.pos, self.dur = pos, dur
+        if not self.dragging:
+            self.pos = pos
+        self.dur = dur
         if self.mode in LIVE:
             self._spectrum_step(paused)
             self.update()
@@ -325,7 +330,7 @@ class WaveView(QWidget):
             qp.setPen(QColor("#8a8d96"))
             qp.drawText(QRectF(0, top, w, h).adjusted(0, 0, 0, -h * 0.25), Qt.AlignCenter, label)
             return
-        key = (mode, w, h, self.ana.blocks, self.ana.done, self.t["name"])
+        key = (mode, w, h, self.ana.blocks, self.ana.done, self.t["name"], self.total_blocks())
         if not self.cache_pix or self.cache_pix[0] != key:
             self.cache_pix = (key,) + self._render(w, h, mode)
         _, played, unplayed = self.cache_pix

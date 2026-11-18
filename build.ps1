@@ -1,5 +1,5 @@
 # Builds Cratedig for Windows:
-#   build\dist\Cratedig\Cratedig.exe          the app (PyInstaller one-folder build, with lib\libmpv-2.dll + lib\ffmpeg.exe)
+#   build\dist\Cratedig\Cratedig.exe          the app (PyInstaller one-folder build, with lib\mpv-2.dll + lib\ffmpeg.exe)
 #   dist\CratedigSetup-<ver>.exe              the installer (Inno Setup 6)
 #   dist\Cratedig-<ver>-portable-win64.zip    the portable version
 # Needs: .venv with requirements + pyinstaller, lib\libmpv-2.dll, ffmpeg on PATH,
@@ -20,7 +20,7 @@ if ($LASTEXITCODE) { throw "PyInstaller failed ($LASTEXITCODE)" }
 
 $app = 'build\dist\Cratedig'
 New-Item -ItemType Directory -Force "$app\lib" | Out-Null
-Copy-Item lib\libmpv-2.dll "$app\lib\"
+Copy-Item lib\libmpv-2.dll "$app\lib\mpv-2.dll"   # python-mpv looks for mpv-2.dll first, across PATH: this name keeps the bundled one first
 Copy-Item (Get-Command ffmpeg).Source "$app\lib\"
 Copy-Item README.md, LICENSE, cratedig.ico $app
 

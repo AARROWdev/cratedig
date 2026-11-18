@@ -16,7 +16,7 @@ function Procs { @(Get-Process Cratedig -ErrorAction SilentlyContinue) }
 
 $p = Start-Process $setup.FullName ($args_ + "/LOG=$out\install.log") -Wait -PassThru
 Check "install exit 0 (got $($p.ExitCode))" ($p.ExitCode -eq 0)
-Check 'Cratedig.exe + lib\libmpv-2.dll + lib\ffmpeg.exe installed' ((Test-Path "$app\Cratedig.exe") -and (Test-Path "$app\lib\libmpv-2.dll") -and (Test-Path "$app\lib\ffmpeg.exe"))
+Check 'Cratedig.exe + lib\mpv-2.dll + lib\ffmpeg.exe installed' ((Test-Path "$app\Cratedig.exe") -and (Test-Path "$app\lib\mpv-2.dll") -and (Test-Path "$app\lib\ffmpeg.exe"))
 Check 'Start Menu shortcut' (Test-Path $lnk)
 Check 'Add/Remove Programs entry' (Test-Path $key)
 Check 'Open with: .mp3 .wav .flac .mp4 .mkv' ((OpenWith '.mp3') -and (OpenWith '.wav') -and (OpenWith '.flac') -and (OpenWith '.mp4') -and (OpenWith '.mkv'))

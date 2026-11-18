@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 LIB = os.path.join(HERE, "lib")
@@ -21,20 +22,21 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileIconProvide
                                QToolButton, QTreeView, QVBoxLayout, QWidget)
 
 import themes  # noqa: E402
-from waveform import MODES, Analyzer, WaveView  # noqa: E402
+from waveform import MODES, Analyzer, WaveView, find_ffmpeg  # noqa: E402
 
 APP = "Cratedig"
 VERSION = "1.1"
 
 AUDIO = {"wav", "mp3", "flac", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus", "wma", "alac",
-         "ape", "wv", "mka", "mid", "midi"}
+         "ape", "wv", "mka"}
 VIDEO = {"mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg", "ts", "m2ts",
          "3gp", "vob", "ogv"}
 MEDIA = AUDIO | VIDEO
 
 
 def natural_key(s):
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s.casefold())]
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))   # Åsgeir sorts with A
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", s.casefold())]   # isdecimal: '²' isn't an int
 
 
 def human_size(n):
@@ -55,19 +57,26 @@ def fmt_time(sec):
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DUR_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+FFMPEG = find_ffmpeg(HERE)   # absolute: a bare "ffmpeg" would run an ffmpeg.exe sitting in the media folder
+WINDIR = os.environ.get("SystemRoot", r"C:\Windows")
 
 
 def probe_duration(path):
-    """Seconds, or -1 if unknown. mutagen first (fast, reads headers only), ffmpeg as fallback."""
+    """Seconds, or -1 if unknown. Audio: mutagen (fast, headers only). Video and WAV go to ffmpeg:
+    mutagen misreads MPEG video, non-PCM WAV and MP4s whose audio is shorter than the picture."""
+    ext = os.path.splitext(path)[1][1:].lower()
+    if ext in AUDIO and ext != "wav":
+        try:
+            import mutagen
+            f = mutagen.File(path)
+            if f is not None and getattr(f, "info", None) and getattr(f.info, "length", 0):
+                return float(f.info.length)
+        except Exception:
+            pass
+    if not FFMPEG:
+        return -1.0
     try:
-        import mutagen
-        f = mutagen.File(path)
-        if f is not None and getattr(f, "info", None) and getattr(f.info, "length", 0):
-            return float(f.info.length)
-    except Exception:
-        pass
-    try:
-        r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path], capture_output=True, text=True,
+        r = subprocess.run([FFMPEG, "-hide_banner", "-nostdin", "-i", path], capture_output=True, text=True,
                            errors="replace", timeout=15, creationflags=NO_WINDOW)
         m = DUR_RE.search(r.stderr)
         if m:
@@ -81,6 +90,7 @@ def probe_duration(path):
 class DurationWorker(QObject):
     """Reads track lengths for one folder on a background thread; results arrive in batches."""
     found = Signal(int, list)   # generation, [(path, seconds)]
+    finished = Signal(int)      # generation
     cache = {}                  # (path, size, mtime) -> seconds, shared across folders
 
     def __init__(self):
@@ -100,13 +110,19 @@ class DurationWorker(QObject):
                 return
             sec = self.cache.get(key)
             if sec is None:
-                sec = self.cache[key] = probe_duration(key[0])
+                sec = probe_duration(key[0])
+                if sec >= 0:   # a failure may be transient (locked file, slow share): Refresh retries it
+                    self.cache[key] = sec
+                if time.monotonic() - last > 0.25:   # only real probes flush: cache hits arrive as one batch
+                    batch.append((key[0], sec))
+                    self.found.emit(gen, batch)
+                    batch, last = [], time.monotonic()
+                    continue
             batch.append((key[0], sec))
-            if len(batch) >= 200 or time.monotonic() - last > 0.25:
+        if gen == self.gen:
+            if batch:
                 self.found.emit(gen, batch)
-                batch, last = [], time.monotonic()
-        if batch and gen == self.gen:
-            self.found.emit(gen, batch)
+            self.finished.emit(gen)
 
 
 class Entry:
@@ -225,7 +241,10 @@ class DirModel(QAbstractTableModel):
             if c == 3:
                 return "" if e.is_dir else human_size(e.size)
             if c == 4:
-                return time.strftime("%Y-%m-%d %H:%M", time.localtime(e.mtime)) if e.mtime else ""
+                try:
+                    return time.strftime("%Y-%m-%d %H:%M", time.localtime(e.mtime)) if e.mtime else ""
+                except (OSError, OverflowError, ValueError):   # before 1970 / far future on Windows
+                    return ""
         elif role == Qt.DecorationRole and c == 0:
             return self.icon_for(e)
         elif role == Qt.TextAlignmentRole and c in (2, 3):
@@ -246,17 +265,18 @@ class SortProxy(QSortFilterProxyModel):
         if a.is_dir != b.is_dir:
             return a.is_dir == (self.sortOrder() == Qt.AscendingOrder)
         c = left.column()
-        ka = {1: a.ext, 2: a.dur or 0, 3: a.size, 4: a.mtime}.get(c)
-        kb = {1: b.ext, 2: b.dur or 0, 3: b.size, 4: b.mtime}.get(c)
+        ka = {1: a.ext, 2: max(a.dur or 0, 0), 3: a.size, 4: a.mtime}.get(c)   # failed probe (-1) sorts with blanks
+        kb = {1: b.ext, 2: max(b.dur or 0, 0), 3: b.size, 4: b.mtime}.get(c)
         if ka is not None and ka != kb:
             return ka < kb
         return a.key < b.key
 
+    text = ""   # raw filter text, casefolded (setFilterFixedString would hand back an escaped pattern)
+
     def filterAcceptsRow(self, row, parent):
-        text = self.filterRegularExpression().pattern()
-        if not text:
+        if not self.text:
             return True
-        return text.casefold() in self.sourceModel().entries[row].name.casefold()
+        return self.text in self.sourceModel().entries[row].name.casefold()
 
 
 def glyph(kind, color="#eef1f5", size=28):
@@ -310,6 +330,23 @@ def glyph(kind, color="#eef1f5", size=28):
     return QIcon(pm)
 
 
+def encodable(p):
+    try:
+        p.encode("utf-8")   # a lone surrogate in a name makes mpv's loadfile raise
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def isdir_within(path, seconds):
+    """os.path.isdir on a thread; False if it doesn't answer in time (offline network drive)."""
+    res = []
+    t = threading.Thread(target=lambda: res.append(os.path.isdir(path)), daemon=True)
+    t.start()
+    t.join(seconds)
+    return bool(res and res[0])
+
+
 class Window(QMainWindow):
     def __init__(self, start_arg=None):
         super().__init__()
@@ -353,7 +390,10 @@ class Window(QMainWindow):
         hdr.resizeSection(1, 110)
         hdr.resizeSection(2, 70)
         hdr.resizeSection(3, 90)
-        self.proxy.layoutChanged.connect(self.update_status)
+        self.status_timer = QTimer(self, singleShot=True, interval=0, timeout=self.update_status)
+        self.proxy.layoutChanged.connect(self.status_timer.start)   # coalesced: one count per burst of re-sorts
+        self.model.durs.finished.connect(self.lengths_filled)
+        self.queue_dir = None
 
         # --- toolbar row
         self.btn_back = self.tool(QStyle.SP_ArrowBack, "Back (Alt+Left)", self.go_back)
@@ -511,6 +551,7 @@ class Window(QMainWindow):
             self.vol.setValue(int(self.settings.value("volume", 80)))
         except (TypeError, ValueError):
             self.vol.setValue(80)
+        self.set_volume(self.vol.value())   # setValue(0) emits nothing on a fresh slider, and mpv starts at 100
 
         self.timer = QTimer(self, interval=200, timeout=self.poll)
         self.timer.start()
@@ -523,7 +564,7 @@ class Window(QMainWindow):
             start_dir = start_arg
         else:
             start_dir = self.settings.value("last_dir") or os.path.expanduser("~")
-            if not os.path.isdir(start_dir):
+            if not isdir_within(start_dir, 2.0):   # an offline NAS would block startup for 20+ s
                 start_dir = os.path.expanduser("~")
         self.navigate(start_dir)
         if start_file:
@@ -542,11 +583,12 @@ class Window(QMainWindow):
         if self.full_hidden is not None:
             self.toggle_full()
         if self.isMinimized():
-            self.showNormal()
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)   # keeps "maximized"
         self.raise_()
         self.activateWindow()
         if arg and os.path.isfile(arg):
             path = os.path.abspath(arg)
+            self.filter.clear()   # a filtered view might not contain the file
             self.navigate(os.path.dirname(path))
             self.play_view(path)
         elif arg and os.path.isdir(arg):
@@ -629,7 +671,7 @@ class Window(QMainWindow):
 
     def go_up(self):
         if self.cwd:
-            parent = os.path.dirname(self.cwd.rstrip("\\/"))
+            parent = os.path.dirname(self.cwd)   # cwd is normalized; at a drive root this is the root again
             if parent and parent != self.cwd:
                 child = self.cwd
                 self.navigate(parent)
@@ -640,7 +682,8 @@ class Window(QMainWindow):
                         break
 
     def apply_filter(self, text):
-        self.proxy.setFilterFixedString(text)
+        self.proxy.text = text.casefold()
+        self.proxy.invalidateFilter()
         self.update_status()
 
     def update_status(self):
@@ -650,7 +693,9 @@ class Window(QMainWindow):
 
     # ---------- list actions
     def activate(self, ix):
-        e = self.entry_at(ix)
+        self.open_entry(self.entry_at(ix))
+
+    def open_entry(self, e):
         if e.is_dir:
             self.navigate(e.path)
         elif e.media:
@@ -665,8 +710,8 @@ class Window(QMainWindow):
             e = self.entry_at(ix)
             if e.media:
                 m.addAction("Play from here", lambda: self.play_view(e.path))
-            m.addAction("Open", lambda: self.activate(ix))
-            m.addAction("Show in Explorer", lambda: subprocess.Popen(["explorer", "/select,", e.path]))
+            m.addAction("Open", lambda: self.open_entry(e))   # e, not ix: rows can re-sort while the menu is open
+            m.addAction("Show in Explorer", lambda: subprocess.Popen(f'"{WINDIR}\\explorer.exe" /select,"{e.path}"'))
             m.addAction("Copy Full Path", lambda: QApplication.clipboard().setText(
                 "\n".join(self.entry_at(i).path for i in self.list.selectionModel().selectedRows()) or e.path))
             m.addSeparator()
@@ -685,7 +730,7 @@ class Window(QMainWindow):
             if k == Qt.Key_Backspace:
                 self.go_up()
                 return True
-            if k == Qt.Key_Space:
+            if k == Qt.Key_Space and ev.modifiers() == Qt.NoModifier:   # Ctrl+Space toggles the selection
                 self.play_pause()
                 return True
             if k == Qt.Key_V:
@@ -705,12 +750,15 @@ class Window(QMainWindow):
     # ---------- playback
     def play_view(self, start_path):
         """Queue every playable file in the current view, in its current sort order."""
-        paths = [e.path for e in self.view_entries() if e.media]
+        paths = [e.path for e in self.view_entries() if e.media and encodable(e.path)]
         if not paths:
             self.statusBar().showMessage("Nothing playable in this view", 4000)
             return
-        start = paths.index(start_path) if start_path in paths else 0
+        norm = [os.path.normcase(p) for p in paths]
+        want = os.path.normcase(start_path) if start_path else None
+        start = norm.index(want) if want in norm else 0
         self.queue = paths
+        self.queue_dir = self.cwd
         self.player.command("stop")
         for p in paths:
             self.player.command("loadfile", p, "append")
@@ -718,6 +766,30 @@ class Window(QMainWindow):
         self.player.pause = False
         if os.path.splitext(paths[start])[1][1:].lower() in VIDEO:
             self.btn_video.setChecked(True)
+
+    def lengths_filled(self, gen):
+        """Sorted by Length, a queue made before the lengths arrived is in the wrong order: once the
+        folder's lengths are in, rebuild mpv's playlist around the playing track in the view's order."""
+        if gen != self.model.durs.gen or self.proxy.sortColumn() != 2 or self.queue_dir != self.cwd:
+            return
+        try:
+            idx = None if self.player.idle_active else self.player.playlist_pos
+        except Exception:
+            return
+        if idx is None or not 0 <= idx < len(self.queue):
+            return
+        new = [e.path for e in self.view_entries() if e.media and encodable(e.path)]
+        if new == self.queue or sorted(new) != sorted(self.queue):
+            return
+        cur = self.queue[idx]
+        self.player.command("playlist-clear")   # keeps the playing entry, now at 0
+        for p in new:
+            if p != cur:
+                self.player.command("loadfile", p, "append")
+        k = new.index(cur)
+        if k:
+            self.player.command("playlist-move", 0, k + 1)
+        self.queue = new
 
     def video_toggled(self, on):
         self.video.setVisible(on)
@@ -734,7 +806,7 @@ class Window(QMainWindow):
         if portrait:
             if sp.orientation() != Qt.Horizontal:
                 sp.setOrientation(Qt.Horizontal)
-                sp.insertWidget(1, self.video)
+            sp.insertWidget(1, self.video)   # always: a restored splitter state can start in either order
             total = sum(sp.sizes()) or sp.width()
             want = int(sp.height() * vw / vh)
             size = max(200, min(want, int(total * 0.6)))
@@ -742,7 +814,7 @@ class Window(QMainWindow):
         else:
             if sp.orientation() != Qt.Vertical:
                 sp.setOrientation(Qt.Vertical)
-                sp.insertWidget(0, self.video)
+            sp.insertWidget(0, self.video)
             total = sum(sp.sizes()) or sp.height()
             want = int(sp.width() * vh / vw)
             size = max(160, min(want, int(total * 0.68)))
@@ -839,13 +911,13 @@ class Window(QMainWindow):
             self.wave.set_track(path)
             if path:
                 self.analyzer.request(path)
+                if os.path.splitext(path)[1][1:].lower() in VIDEO and not self.btn_video.isChecked():
+                    self.btn_video.setChecked(True)   # only on a new track, so V can still hide it
         if path:
             name = os.path.basename(path)
             self.now.setText(f"{name}    ({idx + 1} / {len(self.queue)})")
             self.setWindowTitle(f"{name} - {APP}")
             if os.path.splitext(path)[1][1:].lower() in VIDEO:
-                if not self.btn_video.isChecked():
-                    self.btn_video.setChecked(True)
                 if self.vdims_path != path:
                     dims = self.read_video_dims()
                     if dims:
@@ -858,6 +930,8 @@ class Window(QMainWindow):
         self.t_dur.setText(fmt_time(dur))
 
     def closeEvent(self, ev):
+        if self.full_hidden is not None:
+            self.toggle_full()   # save the normal window, not the fullscreen one
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("hsplit", self.hsplit.saveState())
@@ -900,16 +974,18 @@ def hand_off(arg):
         ctypes.windll.user32.AllowSetForegroundWindow(-1)   # let the running window come to the front
     except Exception:
         pass
-    sock.write((os.path.abspath(arg) if arg else "").encode("utf-8") + b"\n")
+    sock.write((os.path.abspath(arg) if arg else "").encode("utf-8", "surrogatepass") + b"\n")
     sock.flush()
-    sock.waitForBytesWritten(1000)
+    sock.waitForBytesWritten(5000)
+    ok = sock.bytesToWrite() == 0   # False if the open window didn't take it in 5 s
     sock.disconnectFromServer()
-    return True
+    return ok
 
 
 def serve(window):
     server = QLocalServer(window)
     QLocalServer.removeServer(SERVER)   # clears a stale name left by a crash
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)   # an elevated copy stays reachable
     server.listen(SERVER)
 
     def on_conn():
@@ -919,7 +995,7 @@ def serve(window):
         def read():
             buf.extend(bytes(conn.readAll()))
             if b"\n" in buf:
-                arg = buf.split(b"\n", 1)[0].decode("utf-8", "replace")
+                arg = buf.split(b"\n", 1)[0].decode("utf-8", "surrogatepass")
                 conn.disconnectFromServer()
                 window.open_remote(arg)
         conn.readyRead.connect(read)
@@ -930,19 +1006,36 @@ def serve(window):
     return server
 
 
+def claim_instance(app):
+    """Create the app mutexes (the uninstaller checks them too). False if another Cratedig holds them."""
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+    except Exception:
+        return True
+    app.mutexes, first = [], True
+    for n in ("CratedigAppMutex", "Global\\CratedigAppMutex"):
+        h = k32.CreateMutexW(None, False, n)
+        if n == "CratedigAppMutex" and (not h or ctypes.get_last_error() == 183):   # 183 exists; NULL: elevated owner
+            first = False
+        if h:
+            app.mutexes.append(h)
+    return first
+
+
 def main():
     install_error_log()
     app = QApplication(sys.argv)
     app.setApplicationName(APP)
     arg = sys.argv[1] if len(sys.argv) > 1 else None
-    if hand_off(arg):
+    # One player: the launch that creates the mutex builds the window. Every other launch, even one racing
+    # it (3 files opened at once from Explorer), waits up to 10 s for that window's pipe and hands off.
+    if not claim_instance(app):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not hand_off(arg):
+            time.sleep(0.1)
         sys.exit(0)
-    try:   # the uninstaller checks these to refuse while Cratedig runs
-        import ctypes
-        app.mutexes = [ctypes.windll.kernel32.CreateMutexW(None, False, n)
-                       for n in ("CratedigAppMutex", "Global\\CratedigAppMutex")]
-    except Exception:
-        pass
     ico = os.path.join(HERE, "cratedig.ico")
     if os.path.isfile(ico):
         app.setWindowIcon(QIcon(ico))
