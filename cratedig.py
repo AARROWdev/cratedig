@@ -39,6 +39,10 @@ def natural_key(s):
     return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", s.casefold())]   # isdecimal: '²' isn't an int
 
 
+def sort_key(name):
+    return natural_key(name) + [unicodedata.normalize("NFC", name).casefold()]   # "é.mp3" vs "e.mp3": no tie
+
+
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
@@ -126,7 +130,7 @@ class DurationWorker(QObject):
 
 
 class Entry:
-    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur")
+    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold")
 
     def __init__(self, de):
         self.name = de.name
@@ -140,7 +144,8 @@ class Entry:
         except OSError:
             self.is_dir, self.size, self.mtime = False, 0, 0
         self.ext = "" if self.is_dir else os.path.splitext(de.name)[1][1:].lower()
-        self.key = natural_key(de.name)
+        self.key = sort_key(de.name)
+        self.fold = unicodedata.normalize("NFC", de.name).casefold()   # what the filter matches (Mac-copied names are NFD)
 
     @property
     def media(self):
@@ -276,7 +281,7 @@ class SortProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, row, parent):
         if not self.text:
             return True
-        return self.text in self.sourceModel().entries[row].name.casefold()
+        return self.text in self.sourceModel().entries[row].fold
 
 
 def glyph(kind, color="#eef1f5", size=28):
@@ -682,7 +687,7 @@ class Window(QMainWindow):
                         break
 
     def apply_filter(self, text):
-        self.proxy.text = text.casefold()
+        self.proxy.text = unicodedata.normalize("NFC", text).casefold()
         self.proxy.invalidateFilter()
         self.update_status()
 
@@ -756,7 +761,10 @@ class Window(QMainWindow):
             return
         norm = [os.path.normcase(p) for p in paths]
         want = os.path.normcase(start_path) if start_path else None
-        start = norm.index(want) if want in norm else 0
+        if want and want not in norm:   # never play a different file than the one asked for
+            self.statusBar().showMessage(f"Can't play {os.path.basename(start_path)}", 6000)
+            return
+        start = norm.index(want) if want else 0
         self.queue = paths
         self.queue_dir = self.cwd
         self.player.command("stop")
@@ -976,8 +984,12 @@ def hand_off(arg):
         pass
     sock.write((os.path.abspath(arg) if arg else "").encode("utf-8", "surrogatepass") + b"\n")
     sock.flush()
-    sock.waitForBytesWritten(5000)
-    ok = sock.bytesToWrite() == 0   # False if the open window didn't take it in 5 s
+    if sock.bytesToWrite():
+        sock.waitForBytesWritten(5000)   # with nothing pending it would just sit out the timeout
+    deadline = time.monotonic() + 5   # the window confirms it took the file
+    while sock.bytesAvailable() < 2 and time.monotonic() < deadline and sock.state() == QLocalSocket.ConnectedState:
+        sock.waitForReadyRead(100)
+    ok = bytes(sock.readAll()).startswith(b"1")
     sock.disconnectFromServer()
     return ok
 
@@ -996,8 +1008,9 @@ def serve(window):
             buf.extend(bytes(conn.readAll()))
             if b"\n" in buf:
                 arg = buf.split(b"\n", 1)[0].decode("utf-8", "surrogatepass")
-                conn.disconnectFromServer()
-                window.open_remote(arg)
+                conn.write(b"1\n")   # ack first: opening a big folder can take longer than the sender waits
+                conn.flush()   # the sender disconnects once it has read this
+                QTimer.singleShot(0, lambda: window.open_remote(arg))
         conn.readyRead.connect(read)
         conn.disconnected.connect(conn.deleteLater)
         if conn.bytesAvailable():
@@ -1021,6 +1034,10 @@ def claim_instance(app):
             first = False
         if h:
             app.mutexes.append(h)
+    if not first:   # let go: an open handle would keep the mutex alive after its owner exits
+        for h in app.mutexes:
+            k32.CloseHandle(ctypes.c_void_p(h))
+        app.mutexes = []
     return first
 
 
@@ -1032,10 +1049,17 @@ def main():
     # One player: the launch that creates the mutex builds the window. Every other launch, even one racing
     # it (3 files opened at once from Explorer), waits up to 10 s for that window's pipe and hands off.
     if not claim_instance(app):
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not hand_off(arg):
+        # Keep handing off until a window takes the file. If the holder was a closing Cratedig, its mutex goes
+        # away: then this launch becomes the window. 30 s covers a first window that is still starting up.
+        deadline = time.monotonic() + 30
+        while not hand_off(arg):
+            if claim_instance(app):
+                break
+            if time.monotonic() > deadline:
+                sys.exit(1)
             time.sleep(0.1)
-        sys.exit(0)
+        else:
+            sys.exit(0)
     ico = os.path.join(HERE, "cratedig.ico")
     if os.path.isfile(ico):
         app.setWindowIcon(QIcon(ico))

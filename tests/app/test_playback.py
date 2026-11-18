@@ -86,24 +86,28 @@ def test_end_of_queue_goes_idle(make_window, media, tmp_path):
     h.wait_until(lambda: w.player.idle_active and w.cur_path is None, 20, "idle after the last track")
 
 
+def launch_hand_off(path):
+    """A second launch: a separate process sends its file to this test's window, like Explorer would."""
+    import subprocess
+    import sys
+    code = "import sys; sys.path.insert(0, %r); import cratedig as cd; cd.SERVER = %r; print(cd.hand_off(%r))" % (
+        cd.HERE, cd.SERVER, path)
+    return subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+
+
 def test_single_instance_hand_off(make_window, media, tmp_path):
     """Row 16: a second launch hands its file to the open window, which plays it."""
     d = audio_dir(media, tmp_path, ["tone wav.wav", "tone mp3.mp3"])
     w = make_window(d)
     w.server = cd.serve(w)
     target = os.path.join(d, "tone mp3.mp3")
-    import threading
-    ok = {}
-    t = threading.Thread(target=lambda: ok.setdefault("r", cd.hand_off(target)))
-    t.start()
-    wait_playing(w, target)
-    t.join(5)
-    assert ok["r"] is True
-    for _ in range(5):   # five rapid launches: all handed off, still one window
-        t = threading.Thread(target=lambda: cd.hand_off(os.path.join(d, "tone wav.wav")))
-        t.start()
-        h.pump(30)
-        t.join(5)
+    p = launch_hand_off(target)
+    wait_playing(w, target, 40)
+    h.wait_until(lambda: p.poll() is not None, 30, "hand-off returns")   # pump: the window acks from its event loop
+    assert p.stdout.read().strip() == "True"
+    ps = [launch_hand_off(os.path.join(d, "tone wav.wav")) for _ in range(5)]   # five rapid launches
+    h.wait_until(lambda: all(x.poll() is not None for x in ps), 60, "all hand-offs return")
+    assert [x.stdout.read().strip() for x in ps] == ["True"] * 5
     wait_playing(w, os.path.join(d, "tone wav.wav"))
     w.server.close()
 

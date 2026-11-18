@@ -75,13 +75,12 @@ def test_f16_hand_off_false_without_server():
 def test_f2_second_claim_loses(qapp, monkeypatch):
     """The first launch owns the mutex; a racing second launch must not build a window."""
     code = ("import sys; sys.path.insert(0, %r); import cratedig as cd; from PySide6.QtCore import QCoreApplication;"
-            "app = QCoreApplication([]); print(cd.claim_instance(app))") % cd.HERE
-    first = subprocess.Popen([sys.executable, "-c", code + "; import time; time.sleep(4)"],
-                             stdout=subprocess.PIPE, text=True)
-    time.sleep(2.5)
-    second = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
-    out1 = first.communicate(timeout=60)[0]
-    assert out1.strip().endswith("True")
+            "app = QCoreApplication([]); print(cd.claim_instance(app)") % cd.HERE
+    first = subprocess.Popen([sys.executable, "-c", code + ", flush=True); import sys; sys.stdin.readline()"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert first.stdout.readline().strip() == "True"   # waits for the first process to hold the mutex
+    second = subprocess.run([sys.executable, "-c", code + ")"], capture_output=True, text=True, timeout=120)
+    first.communicate("\n", timeout=60)
     assert second.stdout.strip().endswith("False")
 
 
@@ -161,3 +160,50 @@ def test_f27_backspace_at_root_keeps_forward_history(make_window, tmp_path):
     hist = list(w.history)
     w.go_up()
     assert w.history == hist and w.cwd == root
+
+
+# ---------- pass 2
+
+@pytest.mark.window   # holds the real app mutex for a moment
+def test_p2_1_mutex_free_after_holder_exits(qapp):
+    """A launch that lost the claim lets go of its handle, so it can claim once the old window has exited."""
+    code = ("import sys; sys.path.insert(0, %r); import cratedig as cd; from PySide6.QtCore import QCoreApplication;"
+            "app = QCoreApplication([]); print(cd.claim_instance(app), flush=True); sys.stdin.readline()") % cd.HERE
+    first = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert first.stdout.readline().strip() == "True"
+    assert cd.claim_instance(qapp) is False
+    first.communicate("\n", timeout=60)
+    assert cd.claim_instance(qapp) is True
+    for hd in qapp.mutexes:
+        import ctypes
+        ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(hd))
+    qapp.mutexes = []
+
+
+def test_p2_4_sort_tiebreak():
+    assert cd.sort_key("é.mp3") != cd.sort_key("e.mp3")
+
+
+@pytest.mark.window
+def test_p2_4_filter_matches_nfd_names(make_window, tmp_path):
+    import unicodedata
+    d = str(tmp_path / "nfd")
+    os.makedirs(d)
+    open(os.path.join(d, unicodedata.normalize("NFD", "café.wav")), "wb").close()
+    w = make_window(d)
+    w.filter.setText(unicodedata.normalize("NFC", "café"))
+    h.pump(50)
+    assert len(w.view_entries()) == 1
+
+
+@pytest.mark.window
+def test_p2_2_unplayable_start_plays_nothing(make_window, tmp_path, media):
+    d = str(tmp_path / "p")
+    os.makedirs(d)
+    import shutil
+    shutil.copy(os.path.join(media[0], "tone wav.wav"), os.path.join(d, "a.wav"))
+    open(os.path.join(d, "song.mid"), "wb").close()
+    w = make_window(d)
+    w.play_view(os.path.join(d, "song.mid"))
+    h.pump(500)
+    assert w.queue == [] and "Can't play" in w.statusBar().currentMessage()

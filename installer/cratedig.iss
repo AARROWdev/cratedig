@@ -7,6 +7,8 @@
 #endif
 
 #define ProgId "Cratedig.Media"
+; Types an earlier version registered and this one no longer plays: removed on upgrade and uninstall
+#define OldExts "mid midi"
 #define Exts "wav mp3 flac aiff aif m4a aac ogg oga opus wma alac ape wv mka mp4 mkv mov avi webm wmv m4v flv mpg mpeg ts m2ts 3gp vob ogv"
 
 [Setup]
@@ -70,10 +72,10 @@ begin
   if IsAdminInstallMode then Result := HKLM else Result := HKCU;
 end;
 
-procedure EachExt(Add: Boolean);
+procedure EachExt(List: String; Add: Boolean);
 var S, E: String; P: Integer;
 begin
-  S := '{#Exts}' + ' ';
+  S := List + ' ';
   while Length(S) > 0 do begin
     P := Pos(' ', S); E := '.' + Copy(S, 1, P - 1); Delete(S, 1, P);
     if E = '.' then Continue;
@@ -81,19 +83,28 @@ begin
       RegWriteStringValue(RegRoot, 'Software\Classes\' + E + '\OpenWithProgids', '{#ProgId}', '');
       RegWriteStringValue(RegRoot, 'Software\Classes\Applications\Cratedig.exe\SupportedTypes', E, '');
       RegWriteStringValue(RegRoot, 'Software\Cratedig\Capabilities\FileAssociations', E, '{#ProgId}');
-    end else
+    end else begin
       RegDeleteValue(RegRoot, 'Software\Classes\' + E + '\OpenWithProgids', '{#ProgId}');
+      RegDeleteValue(RegRoot, 'Software\Classes\Applications\Cratedig.exe\SupportedTypes', E);
+      RegDeleteValue(RegRoot, 'Software\Cratedig\Capabilities\FileAssociations', E);
+    end;
   end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then EachExt(True);
+  if CurStep = ssPostInstall then begin
+    EachExt('{#OldExts}', False);
+    EachExt('{#Exts}', True);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usUninstall then EachExt(False);
+  if CurUninstallStep = usUninstall then begin
+    EachExt('{#OldExts}', False);
+    EachExt('{#Exts}', False);
+  end;
 end;
 
 // Cratedig holds "CratedigAppMutex" (and the Global\ one) while it runs. Setup closes it (CloseApplications),
