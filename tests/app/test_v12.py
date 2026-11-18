@@ -125,7 +125,7 @@ def test_drop_into_open_playlist_and_reorder(make_window, media, tmp_path):
     w.new_playlist("Set", edit=False)
     files = [os.path.join(d, n) for n in ("tone wav.wav", "tone mp3.mp3", "tone flac.flac")]
     m = w.model
-    assert m.dropMimeData(urls(*files, d), Qt.CopyAction, -1, 0, QModelIndex())   # the folder is ignored
+    m.dropMimeData(urls(*files, d), Qt.CopyAction, -1, 0, QModelIndex())   # the folder is ignored
     assert m.paths() == files
     md = QMimeData()
     md.setData(m.ROWS_MIME, b"2")          # flac to the top
@@ -220,7 +220,7 @@ def test_copy_files_never_overwrites(make_window, media, tmp_path):
     os.makedirs(dest)
     with open(os.path.join(dest, "tone mp3.mp3"), "wb") as f:
         f.write(b"keep me")
-    assert w.copy_playlist_files("Usb", dest) == (2, 1)
+    assert w.copy_playlist_files("Usb", dest) == (2, 1, 0)
     assert open(os.path.join(dest, "tone mp3.mp3"), "rb").read() == b"keep me"
     assert sorted(os.listdir(dest)) == ["tone mp3 (2).mp3", "tone mp3 (3).mp3", "tone mp3.mp3"]
 
@@ -265,3 +265,141 @@ def test_corrupt_playlist_file(make_window, media, tmp_path):
     w.pl_list.refresh()
     w.open_playlist("Junk")   # no crash; unreadable lines become missing rows
     assert all(e.missing for e in w.model.entries)
+
+
+# ---------- 1.2 review pass 1 (V1-V4, v5-v14)
+
+def test_v1_move_drop_from_outside_is_refused(make_window, media, tmp_path):
+    """Shift-drag from Explorer is a Move: refusing it is what stops Explorer deleting the originals."""
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("Mv", edit=False)
+    f = os.path.join(d, "tone wav.wav")
+    m = w.model
+    assert not m.canDropMimeData(urls(f), Qt.MoveAction, -1, 0, QModelIndex())
+    assert not m.dropMimeData(urls(f), Qt.MoveAction, -1, 0, QModelIndex())
+    assert m.paths() == []
+    assert not m.dropMimeData(urls(f), Qt.CopyAction, -1, 0, QModelIndex())   # added, but never reported as dropped
+    assert m.paths() == [f] and os.path.isfile(f)
+
+
+def test_v1_move_drop_event_on_the_view(make_window, media, tmp_path):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QDropEvent
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("Ev", edit=False)
+    f = os.path.join(d, "tone mp3.mp3")
+    ev = QDropEvent(QPointF(10, 10), Qt.MoveAction, urls(f), Qt.LeftButton, Qt.ShiftModifier)
+    from PySide6.QtWidgets import QApplication
+    QApplication.sendEvent(w.list.viewport(), ev)
+    assert not (ev.isAccepted() and ev.dropAction() == Qt.MoveAction)
+    assert os.path.isfile(f)
+
+
+def test_v2_unreadable_playlist_is_never_written(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    os.makedirs(pl.path_for("Locked"))   # can't be read as a file
+    w.pl_list.refresh()
+    assert w.add_to_playlist("Locked", [os.path.join(d, "tone wav.wav")]) == 0
+    assert os.path.isdir(pl.path_for("Locked"))
+    assert w.open_playlist("Locked") is False and w.playlist is None
+    assert w.duplicate_playlist("Locked") is None
+    assert w.export_playlist("Locked", str(tmp_path / "x.m3u8")) is None
+    with pytest.raises(OSError):
+        pl.read(str(tmp_path / "nope.m3u8"))
+
+
+def test_v4_dead_drive_doesnt_stat_each_track(make_window, media, tmp_path, monkeypatch):
+    import time
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    drive = next(c for c in "QXYZWV" if not os.path.exists(c + ":\\"))
+    dead = [os.path.join(drive + ":\\", "nas", f"track{i}.mp3") for i in range(500)]
+    a = os.path.join(d, "tone wav.wav")
+    pl.write(pl.path_for("Nas"), dead + [a])
+    calls = []
+    real = cd.isdir_within
+    monkeypatch.setattr(cd, "isdir_within", lambda p, s: calls.append(p) or real(p, s))
+    w.pl_list.refresh()
+    t = time.monotonic()
+    w.open_playlist("Nas")
+    assert time.monotonic() - t < 5
+    assert all(e.missing for e in w.model.entries[:500]) and not w.model.entries[500].missing
+    assert len(calls) <= 2   # one check per drive
+
+
+def test_v5_url_and_ansi_lines_survive_an_edit(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    url = "http://radio.example/stream.mp3"
+    with open(pl.path_for("Old"), "wb") as f:
+        f.write(("#EXTM3U\n" + url + "\nC:\Música\canción.mp3\n").encode("cp1252"))
+    w.pl_list.refresh()
+    w.open_playlist("Old")
+    w.add_to_playlist("Old", [os.path.join(d, "tone wav.wav")])
+    got = pl.read(pl.path_for("Old"))
+    assert got[0] == url and got[1] == os.path.normpath("C:\Música\canción.mp3")
+
+
+def test_v6_close_in_playlist_keeps_folder_sorting(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("S", edit=False)
+    w.close()
+    w2 = make_window(d)
+    assert w2.list.isSortingEnabled() and w2.proxy.sortColumn() >= 0
+
+
+def test_v7_v12_copy_guard_and_failures(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone mp3.mp3")
+    pl.write(pl.path_for("C"), [a])
+    w.copying = True
+    assert w.copy_playlist_files("C", str(tmp_path)) is None   # second copy refused
+    w.copying = False
+    assert pl.copy_tracks([a], str(tmp_path / "no" / "such")) == (0, 0, 1)
+    assert not os.path.exists(str(tmp_path / "no"))
+
+
+def test_v8_duplicate_row_plays_that_row(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
+    pl.write(pl.path_for("Dup"), [a, b, a])
+    w.pl_list.refresh()
+    w.open_playlist("Dup")
+    w.open_entry(w.model.entries[2])
+    h.wait_until(lambda: w.cur_path, 20, "playing")
+    h.pump(300)
+    assert w.player.playlist_pos == 2
+
+
+def test_v10_play_on_unreadable_playlist_plays_nothing(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    os.makedirs(pl.path_for("Bad"))
+    w.pl_list.refresh()
+    assert not (w.open_playlist("Bad") and w.play_view(None))
+    h.pump(300)
+    assert w.queue == []
+
+
+def test_v3_v9_delete_lands_in_recycle_bin(make_window, media, tmp_path):
+    if not h.IN_SANDBOX:
+        pytest.skip("uses the real Recycle Bin: Sandbox only")
+    import subprocess
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("BinMe", edit=False)
+    shutil.rmtree(d)   # the folder behind the open playlist is gone (v9)
+    assert w.delete_playlist("BinMe")
+    assert w.playlist is None and not os.path.exists(pl.path_for("BinMe"))
+    names = subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "(New-Object -ComObject Shell.Application).NameSpace(10).Items() | ForEach-Object { $_.Name }"],
+                           capture_output=True, text=True).stdout
+    assert "BinMe" in names
+    w.model.edited.emit()   # a late edit must not write the deleted playlist back
+    assert not os.path.exists(pl.path_for("BinMe"))

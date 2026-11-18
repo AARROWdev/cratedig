@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QStandardPaths, Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 EXT = ".m3u8"
@@ -14,7 +14,8 @@ DIR = None   # tests point this at a temp folder
 
 
 def folder():
-    d = DIR or os.path.join(os.path.expanduser("~"), "Music", "Cratedig Playlists")
+    music = QStandardPaths.writableLocation(QStandardPaths.MusicLocation) or os.path.join(os.path.expanduser("~"), "Music")
+    d = DIR or os.path.join(music, "Cratedig Playlists")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -47,19 +48,26 @@ def unique(base):
 
 
 def read(path):
-    """Absolute paths, in order. Relative entries are resolved against the playlist's folder."""
+    """Absolute paths (and URL lines, kept as they are), in order. Relative entries are resolved against the
+    playlist's folder. Raises OSError if the file can't be read: callers must not write over a playlist they
+    couldn't read, or a locked or offline file would come back empty."""
     base = os.path.dirname(path)
-    out = []
+    with open(path, "rb") as f:
+        raw = f.read()
     try:
-        with open(path, encoding="utf-8-sig", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "\x00" in line:
-                    continue
-                p = line if os.path.isabs(line) else os.path.join(base, line)
-                out.append(os.path.normpath(p))
-    except OSError:
-        pass
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("mbcs", "replace")   # an older ANSI .m3u from another player
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "\x00" in line:
+            continue
+        if "://" in line:
+            out.append(line)   # a stream URL: shown as missing, written back unchanged
+            continue
+        p = line if os.path.isabs(line) else os.path.join(base, line)
+        out.append(os.path.normpath(p))
     return out
 
 
@@ -83,30 +91,45 @@ def recycle(path):
                     ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
                     ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
     FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 4, 0x10, 0x40, 0x400
+    FOF_WANTNUKEWARNING = 0x4000   # where there's no Recycle Bin, Windows asks before deleting for good
     op = SHFILEOPSTRUCTW(None, FO_DELETE, os.path.abspath(path) + "\0", None,
-                         FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI, False, None, None)
+                         FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI | FOF_WANTNUKEWARNING,
+                         False, None, None)
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0 and not op.fAnyOperationsAborted \
         and not os.path.exists(path)
 
 
 def copy_tracks(paths, dest):
-    """Copy the files that exist into dest; never overwrite (adds " (2)"). Returns (copied, skipped)."""
-    copied = skipped = 0
+    """Copy the files that exist into dest. Never overwrites: each target is created exclusively, so a file
+    that appears meanwhile gets " (2)" instead. A failed copy leaves nothing behind.
+    Returns (copied, missing, failed)."""
+    copied = missing = failed = 0
     for p in paths:
         if not os.path.isfile(p):
-            skipped += 1
+            missing += 1
             continue
         stem, ext = os.path.splitext(os.path.basename(p))
         target, i = os.path.join(dest, stem + ext), 2
-        while os.path.exists(target):
-            target = os.path.join(dest, f"{stem} ({i}){ext}")
-            i += 1
+        out = None
         try:
-            shutil.copy2(p, target)
+            while out is None:
+                try:
+                    out = open(target, "xb")
+                except FileExistsError:
+                    target = os.path.join(dest, f"{stem} ({i}){ext}")
+                    i += 1
+            with out, open(p, "rb") as src:
+                shutil.copyfileobj(src, out, 1 << 20)
+            shutil.copystat(p, target)
             copied += 1
         except OSError:
-            skipped += 1
-    return copied, skipped
+            failed += 1
+            if out is not None:
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
+    return copied, missing, failed
 
 
 class PlaylistList(QListWidget):
