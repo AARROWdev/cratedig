@@ -345,7 +345,7 @@ def test_v5_w1_w8_encodings_urls_and_file_urls(make_window, media, tmp_path):
     d = crate(media, tmp_path)
     w = make_window(d)
     url = "http://radio.example/stream.mp3"
-    song = r"C:\Música\canción\u2028x.mp3"
+    song = "C:\\Música\\canción\u2028x.mp3"   # a real U+2028 inside the name
     a = os.path.join(d, "tone wav.wav")
     with open(pl.path_for("U16"), "wb") as f:   # UTF-16 with BOM (W1)
         f.write(("#EXTM3U\n" + url + "\n" + song + "\n" + QUrl.fromLocalFile(a).toString() + "\n").encode("utf-16"))
@@ -459,3 +459,48 @@ def test_w7_copystat_failure_keeps_the_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(pl.shutil, "copystat", boom)
     assert pl.copy_tracks([str(src)], str(dest)) == (1, 0, 0)
     assert (dest / "a.mp3").read_bytes() == b"x" * 1000
+
+
+# ---------- 1.2 review pass 3 (X1-X5)
+
+@pytest.mark.parametrize("enc", ["utf-16-le", "utf-32"])
+def test_x1_bomless_utf16_and_utf32_are_refused(tmp_path, enc):
+    p = str(tmp_path / "x.m3u8")
+    raw = "#EXTM3U\nC:\\a.mp3\n".encode(enc)
+    with open(p, "wb") as f:
+        f.write(raw)
+    with pytest.raises(OSError):
+        pl.read(p)
+
+
+def test_x2_unencoded_file_url_kept_verbatim(tmp_path):
+    p = str(tmp_path / "x.m3u8")
+    lines = ["file:///D:/Music/Track #1.mp3", "file:///D:/a?b.mp3"]
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n" + "\n".join(lines) + "\n")
+    assert pl.read(p) == lines
+
+
+def test_x4_cr_only_line_endings(tmp_path):
+    p = str(tmp_path / "x.m3u8")
+    with open(p, "wb") as f:
+        f.write(b"#EXTM3U\rC:\\a.mp3\rC:\\b.mp3\r")
+    assert pl.read(p) == ["C:\\a.mp3", "C:\\b.mp3"]
+
+
+def test_x3_failed_open_in_folder_view_selects_nothing(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    os.makedirs(pl.path_for("Broken"))
+    w.pl_list.refresh()
+    w.pl_list.setCurrentItem(w.pl_list.item_named("Broken"))
+    assert w.open_playlist("Broken") is False
+    assert w.pl_list.currentItem() is None
+
+
+def test_x5_no_access_is_not_called_missing(monkeypatch, tmp_path):
+    def denied(self):
+        raise PermissionError("denied")
+    monkeypatch.setattr(cd.PathEntry, "stat", denied)
+    e = cd.Entry(cd.PathEntry(str(tmp_path / "a.mp3")))
+    assert e.missing and e.why == "no access"

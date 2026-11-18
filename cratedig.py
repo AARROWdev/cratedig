@@ -173,12 +173,16 @@ class Entry:
             st = de.stat()
             self.size = 0 if self.is_dir else st.st_size
             self.mtime = st.st_mtime
-        except (OSError, ValueError):   # ValueError: a NUL in a path from a damaged playlist
+        except (OSError, ValueError) as ex:   # ValueError: a NUL in a path from a damaged playlist
             self.is_dir, self.size, self.mtime = False, 0, 0
             self.missing = isinstance(de, PathEntry)
             if self.missing:
                 self.why = ("stream, not a file" if "://" in de.path else
-                            "drive or share not reachable" if de.dead else "file not found")
+                            "drive or share not reachable" if de.dead else
+                            "file not found" if isinstance(ex, FileNotFoundError) else
+                            "no access" if isinstance(ex, PermissionError) else
+                            "damaged playlist line" if isinstance(ex, ValueError) else
+                            (ex.strerror or str(ex)))
         self.ext = "" if self.is_dir else os.path.splitext(de.name)[1][1:].lower()
         self.key = sort_key(de.name)
         self.fold = unicodedata.normalize("NFC", de.name).casefold()   # what the filter matches (Mac-copied names are NFD)
@@ -1087,6 +1091,8 @@ class Window(QMainWindow):
         except OSError as e:
             self.statusBar().showMessage(f"Can't open {name}: {e.strerror or e}", 8000)
             self.pl_list.refresh(select=self.playlist)
+            if self.playlist is None:
+                self.pl_list.setCurrentItem(None)
             return False
         if not self.playlist:
             self.folder_sort = (self.proxy.sortColumn(), self.proxy.sortOrder())

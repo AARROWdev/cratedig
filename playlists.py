@@ -61,14 +61,16 @@ def read(path):
             text = raw.decode("utf-8-sig")   # strict: a guessed encoding would be written back garbled
     except UnicodeDecodeError:
         raise OSError("this playlist isn't UTF-8 or UTF-16 text, so Cratedig won't change it")
+    if "\x00" in text:   # UTF-16 without a BOM, or UTF-32, decodes as "UTF-8" full of NULs
+        raise OSError("this playlist's text encoding isn't supported, so Cratedig won't change it")
     out = []
-    for line in text.split("\n"):   # not splitlines(): U+2028 and U+0085 can be part of a file name
+    for line in re.split(r"\r\n|\r|\n", text):   # not splitlines(): U+2028 and U+0085 can be in a file name
         line = line.strip()
         if not line or line.startswith("#") or "\x00" in line:
             continue
         if line.lower().startswith("file:"):
-            local = QUrl(line).toLocalFile()
-            if local:
+            local = QUrl(line).toLocalFile()   # an unencoded "#" or "?" would cut the path short:
+            if local and os.path.isfile(local):   # use it only when it names a real file, else keep the line
                 out.append(os.path.normpath(local))
                 continue
         if "://" in line:
