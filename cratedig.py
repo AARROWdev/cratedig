@@ -160,13 +160,14 @@ class PathEntry:
 
 
 class Entry:
-    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold", "missing")
+    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold", "missing", "why")
 
     def __init__(self, de):
         self.name = de.name
         self.path = de.path
         self.dur = None
         self.missing = False
+        self.why = ""
         try:
             self.is_dir = de.is_dir()
             st = de.stat()
@@ -175,6 +176,9 @@ class Entry:
         except (OSError, ValueError):   # ValueError: a NUL in a path from a damaged playlist
             self.is_dir, self.size, self.mtime = False, 0, 0
             self.missing = isinstance(de, PathEntry)
+            if self.missing:
+                self.why = ("stream, not a file" if "://" in de.path else
+                            "drive or share not reachable" if de.dead else "file not found")
         self.ext = "" if self.is_dir else os.path.splitext(de.name)[1][1:].lower()
         self.key = sort_key(de.name)
         self.fold = unicodedata.normalize("NFC", de.name).casefold()   # what the filter matches (Mac-copied names are NFD)
@@ -228,12 +232,7 @@ class DirModel(QAbstractTableModel):
         return err
 
     def load_playlist(self, paths):
-        roots = {}
-        for p in paths:   # one quick check per drive or share: an offline NAS must not freeze the window
-            if "://" not in p:
-                r = os.path.splitdrive(p)[0] + "\\"
-                if r not in roots:
-                    roots[r] = isdir_within(r, 2.0)
+        roots = dirs_alive({os.path.splitdrive(p)[0] + "\\" for p in paths if "://" not in p}, 2.0)
         self.beginResetModel()
         self.pl_mode = True
         self.set_entries([Entry(PathEntry(p, dead="://" not in p and not roots[os.path.splitdrive(p)[0] + "\\"]))
@@ -399,7 +398,7 @@ class DirModel(QAbstractTableModel):
         elif role == Qt.TextAlignmentRole and c in (2, 3):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         elif role == Qt.ToolTipRole and c == 0:
-            return e.path + ("\n(file not found)" if e.missing else "")
+            return e.path + (f"\n({e.why})" if e.missing else "")
         elif role == Qt.ForegroundRole and e.missing:
             return self.grey
         elif role in (Qt.FontRole, Qt.ForegroundRole) and self.playing and e.path == self.playing:
@@ -487,6 +486,20 @@ def encodable(p):
         return True
     except UnicodeEncodeError:
         return False
+
+
+def dirs_alive(paths, seconds):
+    """{path: reachable} for many folders at once, all checked in parallel with one shared deadline."""
+    res = {}
+    threads = []
+    for p in paths:
+        t = threading.Thread(target=lambda p=p: res.__setitem__(p, os.path.isdir(p)), daemon=True)
+        t.start()
+        threads.append(t)
+    end = time.monotonic() + seconds
+    for t in threads:
+        t.join(max(0.0, end - time.monotonic()))
+    return {p: bool(res.get(p)) for p in paths}
 
 
 def isdir_within(path, seconds):
@@ -900,7 +913,7 @@ class Window(QMainWindow):
 
     def open_entry(self, e):
         if e.missing:
-            self.statusBar().showMessage(f"File not found: {e.path}", 6000)
+            self.statusBar().showMessage(f"Can't open {e.path}: {e.why}", 6000)
         elif e.is_dir:
             self.navigate(e.path)
         elif e.media:
@@ -1073,7 +1086,7 @@ class Window(QMainWindow):
             paths = playlists.read(path)
         except OSError as e:
             self.statusBar().showMessage(f"Can't open {name}: {e.strerror or e}", 8000)
-            self.pl_list.refresh()
+            self.pl_list.refresh(select=self.playlist)
             return False
         if not self.playlist:
             self.folder_sort = (self.proxy.sortColumn(), self.proxy.sortOrder())
@@ -1170,7 +1183,7 @@ class Window(QMainWindow):
         return new
 
     def delete_playlist(self, name):
-        if not playlists.recycle(playlists.path_for(name)):
+        if not playlists.recycle(playlists.path_for(name), int(self.winId())):
             self.statusBar().showMessage(f"{name} was not deleted", 6000)
             return False
         if self.playlist == name:
@@ -1230,12 +1243,16 @@ class Window(QMainWindow):
         self.statusBar().showMessage(msg, 10000)
         return copied, missing, failed
 
+    def play_playlist(self, name):
+        if self.open_playlist(name):
+            self.play_view(None)
+
     def playlist_menu(self, pos):
         it = self.pl_list.itemAt(pos)
         m = QMenu(self)
         if it:
             n = it.data(Qt.UserRole)
-            m.addAction("Play", lambda: self.open_playlist(n) and self.play_view(None))
+            m.addAction("Play", lambda: self.play_playlist(n))
             m.addAction("Rename", lambda: self.pl_list.editItem(it))
             m.addAction("Duplicate", lambda: self.duplicate_playlist(n))
             m.addAction("Export as .m3u8...", lambda: self.export_playlist(n))
@@ -1316,7 +1333,7 @@ class Window(QMainWindow):
         if self.player.idle_active:
             cur = self.list.currentIndex()
             e = self.entry_at(cur) if cur.isValid() else None
-            self.play_view(e.path if e and e.media else None)
+            self.play_view(e.path if e and e.media else None, e)
         else:
             self.player.pause = not self.player.pause
 

@@ -89,7 +89,6 @@ def test_video_leaves_compact(make_window, media, tmp_path):
 
 
 def test_close_while_compact_saves_full_window(make_window, media, tmp_path, isolated):
-    from PySide6.QtCore import QSettings
     d = crate(media, tmp_path)
     w = make_window(d, size=(1200, 760))
     w.toggle_compact()
@@ -319,28 +318,50 @@ def test_v4_dead_drive_doesnt_stat_each_track(make_window, media, tmp_path, monk
     dead = [os.path.join(drive + ":\\", "nas", f"track{i}.mp3") for i in range(500)]
     a = os.path.join(d, "tone wav.wav")
     pl.write(pl.path_for("Nas"), dead + [a])
-    calls = []
-    real = cd.isdir_within
-    monkeypatch.setattr(cd, "isdir_within", lambda p, s: calls.append(p) or real(p, s))
+    stats = []
+    real_stat = cd.PathEntry.stat
+    monkeypatch.setattr(cd.PathEntry, "stat", lambda self: (None if self.dead else stats.append(self.path)) or real_stat(self))   # a real os.stat
     w.pl_list.refresh()
     t = time.monotonic()
     w.open_playlist("Nas")
     assert time.monotonic() - t < 5
-    assert all(e.missing for e in w.model.entries[:500]) and not w.model.entries[500].missing
-    assert len(calls) <= 2   # one check per drive
+    assert all(e.missing and e.why == "drive or share not reachable" for e in w.model.entries[:500])
+    assert not w.model.entries[500].missing
+    assert not [p for p in stats if p.startswith(drive + ":")]   # no per-track stat on a dead drive (V4)
 
 
-def test_v5_url_and_ansi_lines_survive_an_edit(make_window, media, tmp_path):
+def test_w2_offline_roots_share_one_deadline(monkeypatch):
+    import threading
+    import time
+    gate = threading.Event()
+    monkeypatch.setattr(cd.os.path, "isdir", lambda p: gate.wait(10) and False)
+    t = time.monotonic()
+    got = cd.dirs_alive({"A:\\", "B:\\", "C:\\"}, 1.0)
+    gate.set()
+    assert time.monotonic() - t < 2.0 and got == {"A:\\": False, "B:\\": False, "C:\\": False}
+
+
+def test_v5_w1_w8_encodings_urls_and_file_urls(make_window, media, tmp_path):
     d = crate(media, tmp_path)
     w = make_window(d)
     url = "http://radio.example/stream.mp3"
-    with open(pl.path_for("Old"), "wb") as f:
-        f.write(("#EXTM3U\n" + url + "\nC:\Música\canción.mp3\n").encode("cp1252"))
+    song = r"C:\Música\canción\u2028x.mp3"
+    a = os.path.join(d, "tone wav.wav")
+    with open(pl.path_for("U16"), "wb") as f:   # UTF-16 with BOM (W1)
+        f.write(("#EXTM3U\n" + url + "\n" + song + "\n" + QUrl.fromLocalFile(a).toString() + "\n").encode("utf-16"))
     w.pl_list.refresh()
-    w.open_playlist("Old")
-    w.add_to_playlist("Old", [os.path.join(d, "tone wav.wav")])
-    got = pl.read(pl.path_for("Old"))
-    assert got[0] == url and got[1] == os.path.normpath("C:\Música\canción.mp3")
+    assert w.open_playlist("U16")
+    w.add_to_playlist("U16", [os.path.join(d, "tone mp3.mp3")])
+    got = pl.read(pl.path_for("U16"))
+    assert got[0] == url and got[1] == os.path.normpath(song) and got[2] == a   # file:/// became a path (W8)
+    ansi = r"C:\Música\canción.mp3".encode("cp1252")
+    raw = b"#EXTM3U\n" + ansi + b"\n"
+    with open(pl.path_for("Ansi"), "wb") as f:   # not UTF-8: refused, never rewritten (W1)
+        f.write(raw)
+    w.pl_list.refresh()
+    assert w.open_playlist("Ansi") is False
+    assert w.add_to_playlist("Ansi", [a]) == 0
+    assert open(pl.path_for("Ansi"), "rb").read() == raw
 
 
 def test_v6_close_in_playlist_keeps_folder_sorting(make_window, media, tmp_path):
@@ -379,10 +400,10 @@ def test_v8_duplicate_row_plays_that_row(make_window, media, tmp_path):
 
 def test_v10_play_on_unreadable_playlist_plays_nothing(make_window, media, tmp_path):
     d = crate(media, tmp_path)
-    w = make_window(d)
+    w = make_window(d)   # the folder view behind it has playable files
     os.makedirs(pl.path_for("Bad"))
     w.pl_list.refresh()
-    assert not (w.open_playlist("Bad") and w.play_view(None))
+    w.play_playlist("Bad")
     h.pump(300)
     assert w.queue == []
 
@@ -403,3 +424,38 @@ def test_v3_v9_delete_lands_in_recycle_bin(make_window, media, tmp_path):
     assert "BinMe" in names
     w.model.edited.emit()   # a late edit must not write the deleted playlist back
     assert not os.path.exists(pl.path_for("BinMe"))
+
+
+
+def test_w3_failed_write_leaves_no_tmp(tmp_path):
+    target = str(tmp_path / "x.m3u8")
+    os.makedirs(target)   # os.replace onto a folder fails
+    with pytest.raises(OSError):
+        pl.write(target, ["C:\\a.mp3"])
+    assert not os.path.exists(target + ".tmp")
+
+
+def test_w5_space_starts_the_selected_duplicate(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
+    pl.write(pl.path_for("D2"), [a, b, a])
+    w.pl_list.refresh()
+    w.open_playlist("D2")
+    w.list.setCurrentIndex(w.proxy.index(2, 0))
+    w.play_pause()
+    h.wait_until(lambda: w.cur_path, 20, "playing")
+    h.pump(300)
+    assert w.player.playlist_pos == 2
+
+
+def test_w7_copystat_failure_keeps_the_copy(tmp_path, monkeypatch):
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x" * 1000)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    def boom(*a, **k):
+        raise PermissionError("no utime")
+    monkeypatch.setattr(pl.shutil, "copystat", boom)
+    assert pl.copy_tracks([str(src)], str(dest)) == (1, 0, 0)
+    assert (dest / "a.mp3").read_bytes() == b"x" * 1000

@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import QStandardPaths, Qt, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 EXT = ".m3u8"
@@ -55,14 +55,22 @@ def read(path):
     with open(path, "rb") as f:
         raw = f.read()
     try:
-        text = raw.decode("utf-8-sig")
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = raw.decode("utf-16")
+        else:
+            text = raw.decode("utf-8-sig")   # strict: a guessed encoding would be written back garbled
     except UnicodeDecodeError:
-        text = raw.decode("mbcs", "replace")   # an older ANSI .m3u from another player
+        raise OSError("this playlist isn't UTF-8 or UTF-16 text, so Cratedig won't change it")
     out = []
-    for line in text.splitlines():
+    for line in text.split("\n"):   # not splitlines(): U+2028 and U+0085 can be part of a file name
         line = line.strip()
         if not line or line.startswith("#") or "\x00" in line:
             continue
+        if line.lower().startswith("file:"):
+            local = QUrl(line).toLocalFile()
+            if local:
+                out.append(os.path.normpath(local))
+                continue
         if "://" in line:
             out.append(line)   # a stream URL: shown as missing, written back unchanged
             continue
@@ -74,14 +82,21 @@ def read(path):
 def write(path, paths):
     """Atomic: a crash mid-write never leaves a half playlist."""
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write("#EXTM3U\n")
-        for p in paths:
-            f.write(p.encode("utf-8", "replace").decode("utf-8") + "\n")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("#EXTM3U\n")
+            for p in paths:
+                f.write(p.encode("utf-8", "replace").decode("utf-8") + "\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
-def recycle(path):
+def recycle(path, hwnd=None):
     """Send a file to the Recycle Bin (never a permanent delete). True on success."""
     import ctypes
     from ctypes import wintypes
@@ -92,7 +107,7 @@ def recycle(path):
                     ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
     FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 4, 0x10, 0x40, 0x400
     FOF_WANTNUKEWARNING = 0x4000   # where there's no Recycle Bin, Windows asks before deleting for good
-    op = SHFILEOPSTRUCTW(None, FO_DELETE, os.path.abspath(path) + "\0", None,
+    op = SHFILEOPSTRUCTW(hwnd, FO_DELETE, os.path.abspath(path) + "\0", None,
                          FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI | FOF_WANTNUKEWARNING,
                          False, None, None)
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0 and not op.fAnyOperationsAborted \
@@ -120,7 +135,10 @@ def copy_tracks(paths, dest):
                     i += 1
             with out, open(p, "rb") as src:
                 shutil.copyfileobj(src, out, 1 << 20)
-            shutil.copystat(p, target)
+            try:
+                shutil.copystat(p, target)
+            except OSError:
+                pass   # some shares refuse timestamps; the copy itself is complete
             copied += 1
         except OSError:
             failed += 1
