@@ -40,7 +40,8 @@ def natural_key(s):
 
 
 def sort_key(name):
-    return natural_key(name) + [unicodedata.normalize("NFC", name).casefold()]   # "é.mp3" vs "e.mp3": no tie
+    # a tuple, not one list: appended to the list, "Demo" vs "Demo2" would compare the name with a number
+    return (natural_key(name), unicodedata.normalize("NFC", name).casefold())   # "é.mp3" vs "e.mp3": no tie
 
 
 def human_size(n):
@@ -1047,7 +1048,7 @@ def main():
     app.setApplicationName(APP)
     arg = sys.argv[1] if len(sys.argv) > 1 else None
     # One player: the launch that creates the mutex builds the window. Every other launch, even one racing
-    # it (3 files opened at once from Explorer), waits up to 10 s for that window's pipe and hands off.
+    # it (3 files opened at once from Explorer), keeps handing off until that window acks (up to 30 s).
     if not claim_instance(app):
         # Keep handing off until a window takes the file. If the holder was a closing Cratedig, its mutex goes
         # away: then this launch becomes the window. 30 s covers a first window that is still starting up.

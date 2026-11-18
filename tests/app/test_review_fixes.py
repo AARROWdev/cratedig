@@ -207,3 +207,24 @@ def test_p2_2_unplayable_start_plays_nothing(make_window, tmp_path, media):
     w.play_view(os.path.join(d, "song.mid"))
     h.pump(500)
     assert w.queue == [] and "Can't play" in w.statusBar().currentMessage()
+
+
+# ---------- pass 3
+
+def test_p3_1_prefix_names_sort_without_error():
+    names = ["Demo2", "a.mp3", "Demo", "Disc", "Disc2", "a1b2", "a1b", "é.mp3", "e.mp3"]
+    out = sorted(names, key=cd.sort_key)   # raised TypeError: '<' between int and str
+    assert out.index("Demo") < out.index("Demo2") and out.index("a1b") < out.index("a1b2")
+
+
+@pytest.mark.window
+def test_p3_1_name_sort_in_window(make_window, tmp_path):
+    d = str(tmp_path / "p3")
+    for n in ("Demo", "Demo2"):
+        os.makedirs(os.path.join(d, n))
+    for n in ("a.mp3", "Disc.mp3", "Disc2.mp3"):
+        open(os.path.join(d, n), "wb").close()
+    w = make_window(d)
+    w.list.sortByColumn(0, cd.Qt.AscendingOrder)
+    got = [e.name for e in w.view_entries()]
+    assert got[:2] == ["Demo", "Demo2"] and sorted(got[2:]) == ["Disc.mp3", "Disc2.mp3", "a.mp3"]
