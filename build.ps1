@@ -1,20 +1,40 @@
-# Builds the portable Windows version: build\dist\Cratedig\Cratedig.exe (+ lib\libmpv-2.dll, lib\ffmpeg.exe)
-# and zips it to build\Cratedig-v<version>-portable-win64.zip
-# Needs: .venv with requirements + pyinstaller, lib\libmpv-2.dll, ffmpeg on PATH.
+# Builds Cratedig for Windows:
+#   build\dist\Cratedig\Cratedig.exe          the app (PyInstaller one-folder build, with lib\libmpv-2.dll + lib\ffmpeg.exe)
+#   dist\CratedigSetup-<ver>.exe              the installer (Inno Setup 6)
+#   dist\Cratedig-<ver>-portable-win64.zip    the portable version
+# Needs: .venv with requirements + pyinstaller, lib\libmpv-2.dll, ffmpeg on PATH,
+# and Inno Setup 6 (winget install JRSoftware.InnoSetup).
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$version = (Select-String -Path cratedig.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue  # only this build's downloads end up in dist
 
-.\.venv\Scripts\python -m PyInstaller --noconfirm --windowed --name Cratedig `
+$m = Select-String -Path cratedig.py -Pattern '^VERSION = "([^"]+)"'
+if (-not $m) { throw 'VERSION not found in cratedig.py' }
+$ver = $m.Matches[0].Groups[1].Value
+
+.\.venv\Scripts\python -m PyInstaller --noconfirm --windowed --name Cratedig --icon "$PSScriptRoot\cratedig.ico" `
+    --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick `
+    --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia --exclude-module PIL `
     --distpath build\dist --workpath build\work --specpath build cratedig.py
+if ($LASTEXITCODE) { throw "PyInstaller failed ($LASTEXITCODE)" }
 
-$dist = 'build\dist\Cratedig'
-New-Item -ItemType Directory -Force "$dist\lib" | Out-Null
-Copy-Item lib\libmpv-2.dll "$dist\lib\"
-Copy-Item (Get-Command ffmpeg).Source "$dist\lib\"
-Copy-Item README.md $dist
+$app = 'build\dist\Cratedig'
+New-Item -ItemType Directory -Force "$app\lib" | Out-Null
+Copy-Item lib\libmpv-2.dll "$app\lib\"
+Copy-Item (Get-Command ffmpeg).Source "$app\lib\"
+Copy-Item README.md, LICENSE, cratedig.ico $app
 
-$zip = "build\Cratedig-v$version-portable-win64.zip"
-if (Test-Path $zip) { Remove-Item $zip }
-Compress-Archive -Path $dist -DestinationPath $zip
-Write-Host "Built $zip"
+$iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+if (-not $iscc) {
+    $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $iscc) { throw 'Inno Setup 6 not found (winget install JRSoftware.InnoSetup)' }
+New-Item -ItemType Directory -Force dist | Out-Null
+& $iscc /Q "/DAppVersion=$ver" installer\cratedig.iss
+if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
+
+$zip = "dist\Cratedig-$ver-portable-win64.zip"
+Compress-Archive -Path $app -DestinationPath $zip -Force
+
+Write-Host "Built $app\Cratedig.exe, dist\CratedigSetup-$ver.exe, $zip"

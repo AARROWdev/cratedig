@@ -929,6 +929,15 @@ def main():
     arg = sys.argv[1] if len(sys.argv) > 1 else None
     if hand_off(arg):
         sys.exit(0)
+    try:   # the uninstaller checks these to refuse while Cratedig runs
+        import ctypes
+        app.mutexes = [ctypes.windll.kernel32.CreateMutexW(None, False, n)
+                       for n in ("CratedigAppMutex", "Global\\CratedigAppMutex")]
+    except Exception:
+        pass
+    ico = os.path.join(HERE, "cratedig.ico")
+    if os.path.isfile(ico):
+        app.setWindowIcon(QIcon(ico))
     themes.apply(app, themes.get(QSettings(APP, APP).value("skin", themes.DEFAULT)))
     w = Window(arg)
     w.server = serve(w)
