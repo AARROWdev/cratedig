@@ -86,7 +86,7 @@ Cratedig remembers your last folder, window size, column layout, volume, view an
 
 - **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
 - **Single instance:** five rapid launches from Windows all hand their file to the one open window
-- **Length column:** every type within 1 second of the real length; 2,000 files fill in without the window stalling
+- **Length column:** every tested type within 1 second of the real length; 2,000 files fill in without the window stalling
 - **Playback:** sort order, next/prev/seek/pause/stop, corrupt files skipped, all 6 waveform views, the video layouts and fullscreen, high DPI at 100/150/200 %
 - **Robustness:** a random click-and-key monkey test (4,500 steps during playback) that fails if the window stops responding for 2 seconds, folders deleted out from under the window, garbage settings
 - **Never writes to your media:** every test file is hashed before and after the whole run
