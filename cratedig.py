@@ -489,9 +489,7 @@ class Window(QMainWindow):
         QShortcut(QKeySequence("Ctrl+L"), self, lambda: (self.addr.setFocus(), self.addr.selectAll()))
         QShortcut(QKeySequence("Ctrl+Right"), self, self.next)
         QShortcut(QKeySequence("Ctrl+Left"), self, self.prev)
-        QShortcut(QKeySequence("Escape"), self.filter, lambda: (self.filter.clear(), self.list.setFocus()),
-                  context=Qt.WidgetShortcut)
-        QShortcut(QKeySequence("Escape"), self, lambda: self.full_hidden is not None and self.toggle_full())
+        QShortcut(QKeySequence("Escape"), self, self.escape)   # one Esc shortcut: two would cancel each other out
         QShortcut(QKeySequence("F"), self, self.toggle_full)
         QShortcut(QKeySequence("F11"), self, self.toggle_full)
         QShortcut(QKeySequence("Space"), self, self.play_pause)
@@ -509,7 +507,10 @@ class Window(QMainWindow):
         hs = self.settings.value("header5")   # 5 columns since Length was added; old 4-column state is ignored
         if hs:
             hdr.restoreState(hs)
-        self.vol.setValue(int(self.settings.value("volume", 80)))
+        try:
+            self.vol.setValue(int(self.settings.value("volume", 80)))
+        except (TypeError, ValueError):
+            self.vol.setValue(80)
 
         self.timer = QTimer(self, interval=200, timeout=self.poll)
         self.timer.start()
@@ -527,6 +528,13 @@ class Window(QMainWindow):
         self.navigate(start_dir)
         if start_file:
             self.play_view(start_file)
+
+    def escape(self):
+        if self.full_hidden is not None:
+            self.toggle_full()
+        elif self.filter.hasFocus():
+            self.filter.clear()
+            self.list.setFocus()
 
     def open_remote(self, arg):
         """A second launch (e.g. double-clicking a file in Windows Explorer) hands its file here
@@ -587,9 +595,9 @@ class Window(QMainWindow):
         if not path or not os.path.isdir(path):
             self.statusBar().showMessage(f"Not a folder: {path}", 4000)
             return
-        path = os.path.normpath(os.path.abspath(path))
         if len(path) == 2 and path[1] == ":":
-            path += "\\"
+            path += "\\"   # "C:" alone means "the current folder on C:" to Windows; the user means the drive
+        path = os.path.normpath(os.path.abspath(path))
         err = self.model.load(path)
         self.cwd = path
         self.addr.setText(path)

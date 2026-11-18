@@ -1,37 +1,50 @@
+<p align="center">
+  <a href="https://github.com/AARROWdev/cratedig/releases/latest">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
+      <img alt="Cratedig. Dig through your crates. A file explorer and media player in one window for Windows: the folder plays in the order you sorted it, with a waveform panel and the length of every track. Tested in a throwaway Windows Sandbox." src="docs/hero-dark.svg" width="100%">
+    </picture>
+  </a>
+</p>
+
 # Cratedig
 
-**A file explorer and media player in one window, for Windows.**
+**Download: [latest release](https://github.com/AARROWdev/cratedig/releases/latest)** (Windows 10/11, 64-bit)
 
 Browse your folders like Explorer, sort them however you want, and hit play: everything in the view plays in that order. Built for digging through crates of WAVs, masters, stems and video clips without bouncing between Explorer and a player.
 
----
+![Cratedig](docs/main.png)
+
+| Spectrogram (Ember skin) | Bars + Spectrum (Neon skin) |
+|---|---|
+| ![Spectrogram](docs/spectrogram.png) | ![Bars + Spectrum](docs/bars.png) |
 
 ## Download
+From the [latest release](https://github.com/AARROWdev/cratedig/releases/latest):
+- **CratedigSetup-&lt;version&gt;.exe** (recommended): installs to Program Files with a Start Menu entry and adds Cratedig to **Open with** for every audio and video type it plays. Run it again to upgrade; it closes Cratedig if it's open.
+- **Cratedig-&lt;version&gt;-portable-win64.zip**: unzip anywhere and run `Cratedig.exe`. Nothing is installed.
 
-Grab the latest **`Cratedig-vX.Y-portable-win64.zip`** from [Releases](../../releases).
+The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn't code-signed yet, so Windows may show "Windows protected your PC": click **More info**, then **Run anyway**.
 
-1. Unzip it anywhere (Desktop, Documents, a USB stick).
-2. Double-click **`Cratedig.exe`**.
+**Make it your default player:** Settings > Apps > Default apps > Cratedig, then pick the file types. (Windows only lets you do that yourself; the installer never takes over.)
 
-That's it. No installer, no Python, no extra downloads. The video engine (mpv) and the waveform engine (ffmpeg) are bundled inside. Windows 10 or 11, 64-bit.
-
-> First launch: Windows SmartScreen may say "Windows protected your PC" because the app isn't code-signed yet. Click **More info → Run anyway**.
-
----
+**Uninstall:** Settings > Apps > Cratedig > Uninstall (portable: delete the folder). It removes the Open with entries too. Your settings stay in the registry (`HKCU\Software\Cratedig`) and the waveform cache in `%LOCALAPPDATA%\Cratedig`; delete those to remove them too.
 
 ## What it does
-
 ### Explorer
 - Folder tree on the left, big file list in the middle
-- Sort by **name, type, size or date** (click a column); folders always stay on top
+- Columns: **name, type, length, size, date**. Click one to sort; folders always stay on top.
+- **Length** of every audio and video file, filled in on a background thread so the window never waits
 - Natural sorting, so `Track 2` comes before `Track 10`
 - **Filter as you type** (Ctrl+F), back / forward / up, editable address bar (Ctrl+L)
 - Right-click: Play from here, Show in Explorer, Copy Full Path
 
 ### Player
 - **Plays in sort order:** double-click any file and the whole view queues from there, in the order you sorted it
-- Audio and video: WAV, FLAC, AIFF, MP3, M4A, OGG, OPUS, MP4, MKV, MOV, WEBM and more
-- Gapless audio between tracks
+- **One player, always:** open a file from Explorer while Cratedig is open and it plays in the same window
+- Audio and video: WAV, FLAC, AIFF, MP3, M4A, OGG, OPUS, WMA, MP4, MKV, MOV, WEBM, AVI and more
+- Gapless audio; a broken file is skipped instead of stopping the queue
 
 ### Waveform panel (6 views, press W to cycle)
 | View | What you see |
@@ -48,14 +61,9 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 ### Video
 - **Smart layout:** vertical 9:16 videos play in a tall column on the right; 16:9 and square play above the list
 - **Fullscreen** for any video: F (or F11), Esc to come back
-- Videos with no audio track just show "no audio" in the waveform panel
 
 ### Skins
 **Blue** (default), **Ember**, **Neon**, **Violet**, **Crimson**: the Skin button recolors the whole app, including the spectrogram.
-
----
-
-## Keyboard
 
 | Key | Action |
 |---|---|
@@ -63,39 +71,46 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 | Space | Play / pause |
 | Backspace | Up a folder |
 | Alt+Left / Alt+Right | Back / forward |
-| Ctrl+F | Filter |
+| Ctrl+F / Esc | Filter / clear it |
 | Ctrl+L | Type a path |
 | Ctrl+Left / Ctrl+Right | Previous / next track |
-| Shift+Left / Shift+Right | Seek -10s / +10s |
+| Shift+Left / Shift+Right | Seek -10 s / +10 s |
 | W | Cycle waveform view |
 | V | Show / hide video |
 | F or F11 | Fullscreen (Esc exits) |
 
-Cratedig remembers your last folder, window size, column layout, volume, view and skin.
+Cratedig remembers your last folder, window size, column layout, volume, view and skin. It only ever reads your media; it never writes to it.
 
----
+## Tested in a throwaway Windows
+`tests/` holds TESTCOUNT automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: every supported audio and video type, portrait and landscape video, video without audio, corrupt and empty files.
 
-## Roadmap
-- Drag-and-drop playlist panel, save/load .m3u
-- Media columns: duration, artist, title, bitrate, sample rate, BPM, key
-- Deep indexed search across drives with filters like `type:wav bpm:170-176 date:2026`
-- A/B loop, quick preview without touching the queue, crossfade
-- Installer (Start Menu, desktop icon, "Open with")
+- **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
+- **Single instance:** five rapid launches from Windows end up as one window playing the last file
+- **Length column:** every type within 1 second of the real length; 2,000 files fill in without the window stalling
+- **Playback:** sort order, next/prev/seek/pause/stop, corrupt files skipped, all 6 waveform views, the video layouts and fullscreen, high DPI at 100/150/200 %
+- **Robustness:** a random click-and-key monkey test (4,500 steps during playback) that fails if the window stops responding for 2 seconds, folders deleted out from under the window, garbage settings
+- **Never writes to your media:** every test file is hashed before and after the whole run
 
-Full plan in [PLAN.md](PLAN.md).
+Release bar: every check passes **3 full runs in a row**. Getting there found BUGCOUNT real bugs, all fixed and covered by a test.
 
----
-
-## Run from source
-
+## Build
 ```
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install -r requirements.txt pyinstaller
+winget install Gyan.FFmpeg            # bundled into the build
+winget install JRSoftware.InnoSetup   # installer compiler
+.\build.ps1   # -> dist\CratedigSetup-<ver>.exe, dist\Cratedig-<ver>-portable-win64.zip
 ```
-- Put `libmpv-2.dll` in a `lib\` folder next to `cratedig.py` (from an mpv dev build, e.g. shinchiro's `mpv-dev-x86_64-*.7z`, or copy it from an mpv.net install).
-- Install ffmpeg: `winget install Gyan.FFmpeg`
-- Run `Cratedig.bat` or `.venv\Scripts\python cratedig.py [folder or file]`
+Put `libmpv-2.dll` in a `lib\` folder first (from an mpv dev build, e.g. shinchiro's `mpv-dev-x86_64-*.7z`). `Cratedig.bat` runs it from source. `tests\sandbox\run-tests.ps1` runs the full suite in a fresh Windows Sandbox.
 
-**Build the portable zip:** `.venv\Scripts\python -m pip install pyinstaller`, then `.\build.ps1`.
+## How it was built
+Python and PySide6 (Qt 6), playback by libmpv, analysis by ffmpeg. Built with [Claude Code](https://claude.com/claude-code): a written spec of what must work and what counts as a bug, a separate AI reviewer session checking every change against it until zero findings, and the Sandbox suite above as the release gate.
 
-Built with Python, PySide6 (Qt), mpv and ffmpeg. Settings live in the registry (`HKCU\Software\Cratedig`); the waveform cache and `error.log` are in `%LOCALAPPDATA%\Cratedig\`.
+## License
+[GPL-3.0](LICENSE). Cratedig bundles [mpv](https://mpv.io) and [FFmpeg](https://ffmpeg.org), which are GPL-licensed.
+
+## Later
+- Drag-and-drop playlist panel, save/load .m3u
+- More media columns: artist, title, bitrate, sample rate, BPM, key
+- Deep indexed search across drives with filters like `type:wav bpm:170-176 date:2026`
+- A/B loop, quick preview without touching the queue, crossfade

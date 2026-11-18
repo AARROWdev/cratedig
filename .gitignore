@@ -5,3 +5,4 @@ lib/
 build/
 dist/
 *.spec
+.venv-test/

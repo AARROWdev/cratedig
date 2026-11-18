@@ -1,10 +1,12 @@
 # Runs INSIDE Windows Sandbox (started by run-sandbox.ps1). Never run it on a real PC.
 # Install -> Open with registrations -> single instance -> upgrade while running -> uninstall.
+# -Keep installs it again at the end (inside.ps1 runs more tests on the installed app).
+param([string]$Dist = 'C:\dist', [string]$Out = 'C:\out', [switch]$Keep)
 $ErrorActionPreference = 'Continue'
-$out = 'C:\out'; $log = "$out\results.txt"
+$out = $Out; $log = "$out\results.txt"
 function Check($name, $ok) { "$(if ($ok) {'PASS'} else {'FAIL'})  $name" | Add-Content $log }
 if ($env:USERNAME -ne 'WDAGUtilityAccount') { 'Not in Windows Sandbox, refusing.' | Set-Content $log; exit 1 }
-$setup = Get-ChildItem C:\dist\CratedigSetup-*.exe | Sort-Object LastWriteTime | Select-Object -Last 1
+$setup = Get-ChildItem "$Dist\CratedigSetup-*.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
 $app = "$env:ProgramFiles\Cratedig"
 $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{6F1B7E0A-2C4D-4E8B-9A61-5D3C2B8F7E14}_is1'
 $lnk = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Cratedig.lnk"
@@ -51,4 +53,10 @@ Check 'Start Menu shortcut removed' (-not (Test-Path $lnk))
 Check 'Add/Remove Programs entry removed' (-not (Test-Path $key))
 Check 'Open with entries removed' (-not (OpenWith '.mp3') -and -not (OpenWith '.mkv') -and -not (Test-Path 'HKLM:\SOFTWARE\Classes\Cratedig.Media') -and -not (Test-Path 'HKLM:\SOFTWARE\Classes\Applications\Cratedig.exe'))
 Check 'Default apps entry removed' (((Get-ItemProperty HKLM:\SOFTWARE\RegisteredApplications).Cratedig -eq $null) -and -not (Test-Path HKLM:\SOFTWARE\Cratedig))
+if ($Keep) {
+    # the uninstaller runs on from a temp copy for a few seconds after the folder is gone
+    $t = 0; while ((Get-Process | Where-Object { $_.Name -like '_iu*' -or $_.Name -like 'unins*' }) -and $t -lt 60) { Start-Sleep 1; $t++ }
+    $p = Start-Process $setup.FullName ($args_ + "/LOG=$out\reinstall.log") -Wait -PassThru
+    Check "reinstall for the next tests (exit $($p.ExitCode))" ($p.ExitCode -eq 0 -and (Test-Path "$app\Cratedig.exe"))
+}
 'DONE' | Add-Content $log
