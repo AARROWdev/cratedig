@@ -11,6 +11,7 @@ function Log($m) { "$(Get-Date -Format HH:mm:ss)  $m" | Add-Content "$out\progre
 $app = "$env:ProgramFiles\Cratedig"
 $silent = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
 $t0 = Get-Date
+Log "audio: $(& powershell -NoProfile -ExecutionPolicy Bypass -File C:\cratedig\tests\sandbox\mute.ps1)"   # no test beeps on the host's speakers
 
 Log 'A1-A4: installer checks'
 & powershell -NoProfile -ExecutionPolicy Bypass -File C:\cratedig\tests\sandbox\smoke.ps1 -Dist C:\cratedig\dist -Out $out -Keep
