@@ -34,10 +34,17 @@ _RealMPV = cd.mpv.MPV
 def pytest_configure(config):
     config.addinivalue_line("markers", "window: opens the real window and plays media: Sandbox only")
     config.addinivalue_line("markers", "big: tens of thousands of files: Sandbox only")
+    config.addinivalue_line("markers", "sandbox: touches real machine state: Sandbox only, even offscreen")
 
 
 def pytest_collection_modifyitems(config, items):
-    if h.IN_SANDBOX or OFFSCREEN:
+    if h.IN_SANDBOX:
+        return
+    real = pytest.mark.skip(reason="touches real machine state (app mutex): Windows Sandbox only")
+    for it in items:
+        if "sandbox" in it.keywords:
+            it.add_marker(real)
+    if OFFSCREEN:
         return
     skip = pytest.mark.skip(reason="runs only inside Windows Sandbox (tests/sandbox/run-tests.ps1)")
     for it in items:
@@ -59,6 +66,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "QSettings", lambda *a, **k: QSettings(ini, QSettings.IniFormat))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     monkeypatch.setattr(cd, "SERVER", f"Cratedig-test-{os.getpid()}-{id(tmp_path)}")
+    monkeypatch.setattr(cd.playlists, "DIR", str(tmp_path / "playlists"))   # never the real Music folder
     extra = {"ao": "null"}
     if OFFSCREEN:
         extra["vo"] = "null"

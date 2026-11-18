@@ -25,7 +25,7 @@ def test_every_type_within_one_second(media):
         if want is None:
             continue
         assert e.dur is not None and abs(e.dur - want) <= 1, f"{e.name}: {e.dur} vs {want}"
-        assert m.data(m.index(m.rows[e.path], 2)) == cd.fmt_time(e.dur)
+        assert m.data(m.index(m.rows[e.path][0], 2)) == cd.fmt_time(e.dur)
 
 
 def test_broken_and_non_media_are_blank(media):

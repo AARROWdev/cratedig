@@ -46,6 +46,16 @@ The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn
 - Audio and video: WAV, FLAC, AIFF, MP3, M4A, OGG, OPUS, WMA, MP4, MKV, MOV, WEBM, AVI and more
 - Gapless audio; a broken file is skipped instead of stopping the queue
 
+### Playlists
+- A **Playlists** panel under the folder tree: click one to see its tracks in the big list, with the same columns
+- **Drag files** from the list onto a playlist to add them, or into an open playlist at any spot; drag inside a playlist to reorder
+- Right-click a playlist: Play, Rename, Duplicate, Export as .m3u8, **Copy files to folder** (e.g. a USB stick; never overwrites), Delete (to the Recycle Bin)
+- In a playlist: Remove from playlist (Delete key; the file stays on disk), Show in Explorer, Copy Full Path
+- Saved as plain `.m3u8` files in `Music\Cratedig Playlists`, so other players open them too. A file that was moved or deleted shows greyed out and is skipped.
+
+### Compact player
+While audio plays, **COMPACT** shrinks Cratedig to a small player: now playing, waveform, transport and volume. **FULL** (or Esc) brings the explorer back. It remembers the compact size, and a video brings the full window back by itself.
+
 ### Waveform panel (6 views, press W to cycle)
 | View | What you see |
 |---|---|
@@ -61,6 +71,7 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 ### Video
 - **Smart layout:** vertical 9:16 videos play in a tall column on the right; 16:9 and square play above the list
 - **Fullscreen** for any video: F (or F11), Esc to come back
+- The Video and Fullscreen buttons show while a video plays; for audio you get COMPACT instead
 
 ### Skins
 **Blue** (default), **Ember**, **Neon**, **Violet**, **Crimson**: the Skin button recolors the whole app, including the spectrogram.
@@ -69,7 +80,8 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 |---|---|
 | Enter / double-click | Open folder or play |
 | Space | Play / pause |
-| Backspace | Up a folder |
+| Backspace | Up a folder (or back from a playlist) |
+| Delete | Remove the selected tracks from the open playlist |
 | Alt+Left / Alt+Right | Back / forward |
 | Ctrl+F / Esc | Filter / clear it |
 | Ctrl+L | Type a path |
@@ -78,8 +90,9 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 | W | Cycle waveform view |
 | V | Show / hide video |
 | F or F11 | Fullscreen (Esc exits) |
+| Esc | Leave fullscreen or the compact player |
 
-Cratedig remembers your last folder, window size, column layout, volume, view and skin. It only ever reads your media; it never writes to it.
+Cratedig remembers your last folder, window size, column layout, volume, view and skin. It never changes, moves or deletes your media.
 
 ## Tested in a throwaway Windows
 `tests/` holds 97 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
@@ -110,7 +123,6 @@ Python and PySide6 (Qt 6), playback by libmpv, analysis by ffmpeg. Built with [C
 [GPL-3.0](LICENSE). Cratedig bundles [mpv](https://mpv.io) and [FFmpeg](https://ffmpeg.org), which are GPL-licensed.
 
 ## Later
-- Drag-and-drop playlist panel, save/load .m3u
 - More media columns: artist, title, bitrate, sample rate, BPM, key
 - Deep indexed search across drives with filters like `type:wav bpm:170-176 date:2026`
 - A/B loop, quick preview without touching the queue, crossfade

@@ -12,20 +12,21 @@ LIB = os.path.join(HERE, "lib")
 os.environ["PATH"] = LIB + os.pathsep + HERE + os.pathsep + os.environ.get("PATH", "")
 
 import mpv  # noqa: E402
-from PySide6.QtCore import (QAbstractTableModel, QDir, QFileInfo, QModelIndex, QObject, QSettings,  # noqa: E402
-                            QSortFilterProxyModel, Qt, QTimer, Signal)
+from PySide6.QtCore import (QAbstractTableModel, QDir, QFileInfo, QMimeData, QModelIndex, QObject,  # noqa: E402
+                            QSettings, QSortFilterProxyModel, Qt, QTimer, QUrl, Signal)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut  # noqa: E402
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileIconProvider,  # noqa: E402
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFileIconProvider,  # noqa: E402
                                QFileSystemModel, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QMainWindow, QMenu, QPushButton, QSlider, QSplitter, QStyle,
                                QToolButton, QTreeView, QVBoxLayout, QWidget)
 
+import playlists  # noqa: E402
 import themes  # noqa: E402
 from waveform import MODES, Analyzer, WaveView, find_ffmpeg  # noqa: E402
 
 APP = "Cratedig"
-VERSION = "1.1"
+VERSION = "1.2"
 
 AUDIO = {"wav", "mp3", "flac", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus", "wma", "alac",
          "ape", "wv", "mka"}
@@ -141,27 +142,43 @@ class DurationWorker(QObject):
             self.finished.emit(gen)
 
 
+class PathEntry:
+    """os.DirEntry look-alike for a path from a playlist (which may no longer exist)."""
+
+    def __init__(self, path):
+        self.path = path
+        self.name = os.path.basename(path)
+
+    def is_dir(self):
+        return False
+
+    def stat(self):
+        return os.stat(self.path)
+
+
 class Entry:
-    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold")
+    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold", "missing")
 
     def __init__(self, de):
         self.name = de.name
         self.path = de.path
         self.dur = None
+        self.missing = False
         try:
             self.is_dir = de.is_dir()
             st = de.stat()
             self.size = 0 if self.is_dir else st.st_size
             self.mtime = st.st_mtime
-        except OSError:
+        except (OSError, ValueError):   # ValueError: a NUL in a path from a damaged playlist
             self.is_dir, self.size, self.mtime = False, 0, 0
+            self.missing = isinstance(de, PathEntry)
         self.ext = "" if self.is_dir else os.path.splitext(de.name)[1][1:].lower()
         self.key = sort_key(de.name)
         self.fold = unicodedata.normalize("NFC", de.name).casefold()   # what the filter matches (Mac-copied names are NFD)
 
     @property
     def media(self):
-        return not self.is_dir and self.ext in MEDIA
+        return not self.is_dir and not self.missing and self.ext in MEDIA
 
     @property
     def type_label(self):
@@ -172,11 +189,15 @@ class Entry:
 
 class DirModel(QAbstractTableModel):
     COLS = ["Name", "Type", "Length", "Size", "Date modified"]
+    ROWS_MIME = "application/x-cratedig-rows"
+    edited = Signal()   # a playlist's rows changed (drop, reorder, remove): save it
 
     def __init__(self):
         super().__init__()
         self.entries = []
         self.rows = {}
+        self.pl_mode = False
+        self.grey = QColor("#7d8590")
         self.durs = DurationWorker()
         self.durs.found.connect(self.set_durations)
         self.playing = None
@@ -199,23 +220,120 @@ class DirModel(QAbstractTableModel):
                         pass
         except OSError as e:
             err = str(e)
+        self.pl_mode = False
+        self.set_entries(items)
+        return err
+
+    def load_playlist(self, paths):
+        self.beginResetModel()
+        self.pl_mode = True
+        self.set_entries([Entry(PathEntry(p)) for p in paths])
+
+    def set_entries(self, items, reset=False):
+        if reset:
+            self.beginResetModel()
         self.entries = items
-        self.rows = {e.path: i for i, e in enumerate(items)}
+        self.reindex()
         self.endResetModel()
         self.durs.start(items)
-        return err
+
+    def reindex(self):
+        self.rows = {}
+        for i, e in enumerate(self.entries):
+            self.rows.setdefault(e.path, []).append(i)   # a playlist can hold the same file twice
+
+    def paths(self):
+        return [e.path for e in self.entries]
+
+    # drag and drop: files drag out of any view as file URLs; a playlist view accepts files and reorders
+    def flags(self, index):
+        f = super().flags(index)
+        if index.isValid() and not self.entries[index.row()].is_dir:
+            f |= Qt.ItemIsDragEnabled
+        if self.pl_mode:
+            f |= Qt.ItemIsDropEnabled
+        return f
+
+    def mimeTypes(self):
+        return ["text/uri-list", self.ROWS_MIME]
+
+    def supportedDragActions(self):
+        return Qt.CopyAction   # never Move: a drag must not delete anything, here or in Windows Explorer
+
+    def supportedDropActions(self):
+        return Qt.CopyAction
+
+    def mimeData(self, indexes):
+        rows = sorted({ix.row() for ix in indexes if ix.isValid() and not self.entries[ix.row()].is_dir})
+        md = QMimeData()
+        md.setUrls([QUrl.fromLocalFile(self.entries[r].path) for r in rows])
+        if self.pl_mode:
+            md.setData(self.ROWS_MIME, ",".join(map(str, rows)).encode())
+        return md
+
+    def canDropMimeData(self, data, action, row, column, parent):
+        return self.pl_mode and (data.hasFormat(self.ROWS_MIME) or data.hasUrls())
+
+    def dropMimeData(self, data, action, row, column, parent):
+        if not self.pl_mode:
+            return False
+        if row < 0:
+            row = parent.row() if parent.isValid() else len(self.entries)
+        if data.hasFormat(self.ROWS_MIME):   # reorder inside the playlist
+            try:
+                rows = [int(x) for x in bytes(data.data(self.ROWS_MIME)).decode().split(",") if x]
+            except ValueError:
+                return False
+            rows = [r for r in rows if 0 <= r < len(self.entries)]
+            if not rows:
+                return False
+            moving = [self.entries[r] for r in rows]
+            keep = [e for i, e in enumerate(self.entries) if i not in set(rows)]
+            at = row - sum(1 for r in rows if r < row)
+            self.beginResetModel()
+            self.entries = keep[:at] + moving + keep[at:]
+            self.reindex()
+            self.endResetModel()
+            self.edited.emit()
+            return False   # handled here; False so the view never removes the "moved" source rows
+        files = [os.path.normpath(u.toLocalFile()) for u in data.urls() if u.isLocalFile()]
+        self.insert_paths(row, files)
+        return True
+
+    def insert_paths(self, row, files):
+        files = [f for f in files if os.path.isfile(f) and os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+        if not files:
+            return 0
+        row = max(0, min(row, len(self.entries)))
+        new = [Entry(PathEntry(f)) for f in files]
+        self.beginInsertRows(QModelIndex(), row, row + len(new) - 1)
+        self.entries[row:row] = new
+        self.reindex()
+        self.endInsertRows()
+        self.durs.start(self.entries)
+        self.edited.emit()
+        return len(new)
+
+    def remove_rows(self, rows):
+        rows = sorted({r for r in rows if 0 <= r < len(self.entries)}, reverse=True)
+        if not rows:
+            return
+        self.beginResetModel()
+        for r in rows:
+            del self.entries[r]
+        self.reindex()
+        self.endResetModel()
+        self.edited.emit()
 
     def set_durations(self, gen, batch):
         if gen != self.durs.gen:
             return
         lo, hi = None, None
         for path, sec in batch:
-            r = self.rows.get(path)
-            if r is None:
-                continue
-            self.entries[r].dur = sec
-            lo = r if lo is None else min(lo, r)
-            hi = r if hi is None else max(hi, r)
+            for r in self.rows.get(path, ()):
+                self.entries[r].dur = sec
+                lo = r if lo is None else min(lo, r)
+                hi = r if hi is None else max(hi, r)
         if lo is not None:
             self.dataChanged.emit(self.index(lo, 2), self.index(hi, 2))
 
@@ -267,7 +385,9 @@ class DirModel(QAbstractTableModel):
         elif role == Qt.TextAlignmentRole and c in (2, 3):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         elif role == Qt.ToolTipRole and c == 0:
-            return e.path
+            return e.path + ("\n(file not found)" if e.missing else "")
+        elif role == Qt.ForegroundRole and e.missing:
+            return self.grey
         elif role in (Qt.FontRole, Qt.ForegroundRole) and self.playing and e.path == self.playing:
             return self.bold if role == Qt.FontRole else self.accent
         return None
@@ -373,6 +493,8 @@ class Window(QMainWindow):
         self.history, self.hist_pos = [], -1
         self.queue = []
         self.cur_path = None
+        self.playlist = None     # name of the open playlist, or None in folder view
+        self.compact_from = None  # (geometry, was_maximized) while compact
         self.theme = themes.get(self.settings.value("skin", themes.DEFAULT))
 
         # --- folder tree
@@ -400,7 +522,13 @@ class Window(QMainWindow):
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self.context_menu)
         self.list.doubleClicked.connect(self.activate)
+        self.list.setDragEnabled(True)
+        self.list.setAcceptDrops(True)
+        self.list.setDropIndicatorShown(True)
+        self.list.setDragDropMode(QAbstractItemView.DragDrop)
+        self.list.setDefaultDropAction(Qt.CopyAction)
         self.list.sortByColumn(0, Qt.AscendingOrder)
+        self.model.edited.connect(self.playlist_edited)
         hdr = self.list.header()
         hdr.setSectionResizeMode(0, QHeaderView.Interactive)
         hdr.resizeSection(0, 420)
@@ -441,8 +569,38 @@ class Window(QMainWindow):
         self.vsplit.setSizes([420, 500])
         self.video.hide()
 
+        # --- playlists panel (under the folder tree)
+        self.pl_list = playlists.PlaylistList()
+        self.pl_list.itemClicked.connect(lambda it: self.open_playlist(it.data(Qt.UserRole)))
+        self.pl_list.itemChanged.connect(self.playlist_renamed)
+        self.pl_list.filesDropped.connect(self.add_to_playlist)
+        self.pl_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.pl_list.customContextMenuRequested.connect(self.playlist_menu)
+        pl_head = QHBoxLayout()
+        pl_head.setContentsMargins(4, 4, 4, 0)
+        pl_title = QLabel("Playlists")
+        pl_title.setObjectName("now")
+        pl_head.addWidget(pl_title, 1)
+        self.btn_new_pl = QToolButton()
+        self.btn_new_pl.setText("+")
+        self.btn_new_pl.setToolTip("New playlist (drag files from the list onto a playlist to add them)")
+        self.btn_new_pl.setAutoRaise(True)
+        self.btn_new_pl.clicked.connect(lambda: self.new_playlist())
+        pl_head.addWidget(self.btn_new_pl)
+        pl_panel = QWidget()
+        pl_lay = QVBoxLayout(pl_panel)
+        pl_lay.setContentsMargins(0, 0, 0, 0)
+        pl_lay.setSpacing(2)
+        pl_lay.addLayout(pl_head)
+        pl_lay.addWidget(self.pl_list)
+        self.left = QSplitter(Qt.Vertical)
+        self.left.addWidget(self.tree)
+        self.left.addWidget(pl_panel)
+        self.left.setSizes([600, 220])
+        self.pl_list.refresh()
+
         self.hsplit = QSplitter(Qt.Horizontal)
-        self.hsplit.addWidget(self.tree)
+        self.hsplit.addWidget(self.left)
         self.hsplit.addWidget(self.vsplit)
         self.hsplit.setSizes([260, 1100])
 
@@ -462,6 +620,10 @@ class Window(QMainWindow):
         self.btn_full.setText("Fullscreen")
         self.btn_full.setToolTip("Fullscreen video (F, Esc to exit)")
         self.btn_full.clicked.connect(self.toggle_full)
+        self.btn_compact = QToolButton()
+        self.btn_compact.setText("COMPACT")
+        self.btn_compact.setToolTip("Small player without the explorer (Esc to come back)")
+        self.btn_compact.clicked.connect(self.toggle_compact)
         self.full_hidden = None
         self.vdims = None        # (w, h) of the current video, rotation applied
         self.vdims_path = None
@@ -489,6 +651,7 @@ class Window(QMainWindow):
         row1.addWidget(self.btn_skin)
         row1.addWidget(self.btn_video)
         row1.addWidget(self.btn_full)
+        row1.addWidget(self.btn_compact)
         row2 = QHBoxLayout()
         for b in (self.btn_prev, self.btn_play, self.btn_next, self.btn_stop):
             row2.addWidget(b)
@@ -557,7 +720,7 @@ class Window(QMainWindow):
             self.restoreGeometry(geo)
         else:
             self.resize(1400, 860)
-        for key, sp in (("hsplit", self.hsplit), ("vsplit", self.vsplit)):
+        for key, sp in (("hsplit", self.hsplit), ("vsplit", self.vsplit), ("lsplit", self.left)):
             st = self.settings.value(key)
             if st:
                 sp.restoreState(st)
@@ -572,6 +735,7 @@ class Window(QMainWindow):
 
         self.timer = QTimer(self, interval=200, timeout=self.poll)
         self.timer.start()
+        self.show_media_buttons(None)
 
         start_file = None
         if start_arg and os.path.isfile(start_arg):
@@ -590,6 +754,8 @@ class Window(QMainWindow):
     def escape(self):
         if self.full_hidden is not None:
             self.toggle_full()
+        elif self.compact_from is not None:
+            self.toggle_compact()
         elif self.filter.hasFocus():
             self.filter.clear()
             self.list.setFocus()
@@ -599,6 +765,8 @@ class Window(QMainWindow):
         instead of starting another player."""
         if self.full_hidden is not None:
             self.toggle_full()
+        if self.compact_from is not None and arg and os.path.isdir(arg):
+            self.toggle_compact()   # a folder needs the explorer
         if self.isMinimized():
             self.setWindowState(self.windowState() & ~Qt.WindowMinimized)   # keeps "maximized"
         self.raise_()
@@ -657,6 +825,7 @@ class Window(QMainWindow):
         if len(path) == 2 and path[1] == ":":
             path += "\\"   # "C:" alone means "the current folder on C:" to Windows; the user means the drive
         path = os.path.normpath(os.path.abspath(path))
+        self.leave_playlist()
         err = self.model.load(path)
         self.cwd = path
         self.addr.setText(path)
@@ -687,6 +856,9 @@ class Window(QMainWindow):
             self.navigate(self.history[self.hist_pos], record=False)
 
     def go_up(self):
+        if self.playlist:
+            self.navigate(self.cwd, record=False)   # Up from a playlist: back to the folder
+            return
         if self.cwd:
             parent = os.path.dirname(self.cwd)   # cwd is normalized; at a drive root this is the root again
             if parent and parent != self.cwd:
@@ -713,7 +885,9 @@ class Window(QMainWindow):
         self.open_entry(self.entry_at(ix))
 
     def open_entry(self, e):
-        if e.is_dir:
+        if e.missing:
+            self.statusBar().showMessage(f"File not found: {e.path}", 6000)
+        elif e.is_dir:
             self.navigate(e.path)
         elif e.media:
             self.play_view(e.path)
@@ -732,8 +906,21 @@ class Window(QMainWindow):
             m.addAction("Copy Full Path", lambda: QApplication.clipboard().setText(
                 "\n".join(self.entry_at(i).path for i in self.list.selectionModel().selectedRows()) or e.path))
             m.addSeparator()
-        m.addAction("Play all (sort order)", lambda: self.play_view(None))
-        m.addAction("Refresh", lambda: self.navigate(self.cwd, record=False))
+        if self.playlist:
+            if ix.isValid():
+                m.addAction("Remove from playlist", self.remove_selected)
+            m.addAction("Play playlist", lambda: self.play_view(None))
+            m.addAction("Refresh", lambda: self.open_playlist(self.playlist))
+        else:
+            m.addAction("Play all (sort order)", lambda: self.play_view(None))
+            m.addAction("Refresh", lambda: self.navigate(self.cwd, record=False))
+            sel = [self.entry_at(i).path for i in self.list.selectionModel().selectedRows()
+                   if self.entry_at(i).media] or ([e.path] if ix.isValid() and e.media else [])
+            names_ = playlists.names()
+            if sel and names_:
+                sub = m.addMenu("Add to playlist")
+                for n in names_:
+                    sub.addAction(n, lambda n=n: self.add_to_playlist(n, sel))
         m.exec(self.list.viewport().mapToGlobal(pos))
 
     def eventFilter(self, obj, ev):
@@ -746,6 +933,9 @@ class Window(QMainWindow):
                 return True
             if k == Qt.Key_Backspace:
                 self.go_up()
+                return True
+            if k == Qt.Key_Delete and self.playlist:
+                self.remove_selected()
                 return True
             if k == Qt.Key_Space and ev.modifiers() == Qt.NoModifier:   # Ctrl+Space toggles the selection
                 self.play_pause()
@@ -778,7 +968,7 @@ class Window(QMainWindow):
             return
         start = norm.index(want) if want else 0
         self.queue = paths
-        self.queue_dir = self.cwd
+        self.queue_dir = self.view_id()
         self.player.command("stop")
         for p in paths:
             self.player.command("loadfile", p, "append")
@@ -790,7 +980,7 @@ class Window(QMainWindow):
     def lengths_filled(self, gen):
         """Sorted by Length, a queue made before the lengths arrived is in the wrong order: once the
         folder's lengths are in, rebuild mpv's playlist around the playing track in the view's order."""
-        if gen != self.model.durs.gen or self.proxy.sortColumn() != 2 or self.queue_dir != self.cwd:
+        if gen != self.model.durs.gen or self.proxy.sortColumn() != 2 or self.queue_dir != self.view_id():
             return
         try:
             idx = None if self.player.idle_active else self.player.playlist_pos
@@ -810,6 +1000,194 @@ class Window(QMainWindow):
         if k:
             self.player.command("playlist-move", 0, k + 1)
         self.queue = new
+
+    def view_id(self):
+        return ("playlist", self.playlist) if self.playlist else self.cwd
+
+    # ---------- compact mode
+    def show_media_buttons(self, path):
+        video = bool(path) and os.path.splitext(path)[1][1:].lower() in VIDEO
+        self.btn_video.setVisible(video)
+        self.btn_full.setVisible(video)
+        self.btn_compact.setVisible(not video or self.compact_from is not None)
+
+    def toggle_compact(self):
+        if self.compact_from is None:
+            self.compact_from = (self.normalGeometry(), self.isMaximized())
+            self.btn_video.setChecked(False)
+            for w in (self.topbar, self.hsplit, self.statusBar()):
+                w.hide()
+            self.btn_compact.setText("FULL")
+            self.btn_compact.setToolTip("Back to the full window (Esc)")
+            self.showNormal()
+            geo = self.settings.value("compact_geo")
+            if geo:
+                self.restoreGeometry(geo)
+            else:
+                self.resize(560, 10)   # the layout's minimum height wins
+            self.setMinimumWidth(420)
+        else:
+            self.settings.setValue("compact_geo", self.saveGeometry())
+            geo, was_max = self.compact_from
+            self.compact_from = None
+            self.setMinimumWidth(0)
+            for w in (self.topbar, self.hsplit, self.statusBar()):
+                w.show()
+            self.btn_compact.setText("COMPACT")
+            self.btn_compact.setToolTip("Small player without the explorer (Esc to come back)")
+            self.setGeometry(geo)
+            if was_max:
+                self.showMaximized()
+            self.show_media_buttons(self.cur_path)
+
+    # ---------- playlists
+    def leave_playlist(self):
+        if not self.playlist:
+            return
+        self.playlist = None
+        self.pl_list.clearSelection()
+        self.list.setSortingEnabled(True)
+        col, order = getattr(self, "folder_sort", (0, Qt.AscendingOrder))
+        self.list.sortByColumn(col, order)
+
+    def open_playlist(self, name):
+        path = playlists.path_for(name)
+        if not os.path.isfile(path):
+            self.pl_list.refresh()
+            return
+        if not self.playlist:
+            self.folder_sort = (self.proxy.sortColumn(), self.proxy.sortOrder())
+        self.playlist = name
+        self.list.setSortingEnabled(False)
+        self.proxy.sort(-1)   # playlist order
+        self.model.load_playlist(playlists.read(path))
+        self.addr.setText(f"Playlist: {name}")
+        it = self.pl_list.item_named(name)
+        if it:
+            self.pl_list.setCurrentItem(it)
+        self.list.scrollToTop()
+        self.update_status()
+
+    def playlist_edited(self):
+        if self.playlist:
+            try:
+                playlists.write(playlists.path_for(self.playlist), self.model.paths())
+            except OSError as e:
+                self.statusBar().showMessage(f"Couldn't save playlist: {e}", 8000)
+            self.status_timer.start()
+
+    def add_to_playlist(self, name, files):
+        if self.playlist == name:
+            n = self.model.insert_paths(len(self.model.entries), files)
+        else:
+            files = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+            path = playlists.path_for(name)
+            n = len(files)
+            if n:
+                playlists.write(path, playlists.read(path) + files)
+        self.statusBar().showMessage(f"Added {n} to {name}" if n else "Only audio and video files can go in a playlist", 4000)
+
+    def remove_selected(self):
+        if self.playlist:
+            self.model.remove_rows([self.proxy.mapToSource(i).row() for i in self.list.selectionModel().selectedRows()])
+
+    def new_playlist(self, name="New playlist", edit=True):
+        name = playlists.unique(playlists.clean_name(name) or "New playlist")
+        playlists.write(playlists.path_for(name), [])
+        self.pl_list.refresh(select=name)
+        self.open_playlist(name)
+        it = self.pl_list.item_named(name)
+        if edit and it:
+            self.pl_list.editItem(it)
+        return name
+
+    def playlist_renamed(self, item):
+        old, new = item.data(Qt.UserRole), playlists.clean_name(item.text())
+        self.rename_playlist(old, new)
+
+    def rename_playlist(self, old, new):
+        new = playlists.clean_name(new)
+        src = playlists.path_for(old)
+        if not new or new == old:
+            self.pl_list.refresh(select=old)
+            return old
+        if os.path.exists(playlists.path_for(new)) and os.path.normcase(new) != os.path.normcase(old):
+            self.statusBar().showMessage(f"A playlist called {new} already exists", 5000)
+            self.pl_list.refresh(select=old)
+            return old
+        try:
+            os.replace(src, playlists.path_for(new))
+        except OSError as e:
+            self.statusBar().showMessage(f"Couldn't rename: {e}", 6000)
+            self.pl_list.refresh(select=old)
+            return old
+        if self.playlist == old:
+            self.playlist = new
+            self.addr.setText(f"Playlist: {new}")
+        if self.queue_dir == ("playlist", old):
+            self.queue_dir = ("playlist", new)
+        self.pl_list.refresh(select=new)
+        return new
+
+    def duplicate_playlist(self, name):
+        new = playlists.unique(f"{name} copy")
+        playlists.write(playlists.path_for(new), playlists.read(playlists.path_for(name)))
+        self.pl_list.refresh(select=new)
+        return new
+
+    def delete_playlist(self, name):
+        if not playlists.recycle(playlists.path_for(name)):
+            self.statusBar().showMessage(f"Couldn't move {name} to the Recycle Bin", 6000)
+            return False
+        if self.playlist == name:
+            self.navigate(self.cwd, record=False)
+        self.pl_list.refresh()
+        self.statusBar().showMessage(f"{name} moved to the Recycle Bin", 4000)
+        return True
+
+    def export_playlist(self, name, target=None):
+        if target is None:
+            target, _ = QFileDialog.getSaveFileName(self, "Export playlist", os.path.join(
+                os.path.expanduser("~"), name + ".m3u8"), "Playlist (*.m3u8)")
+        if target:
+            playlists.write(target, playlists.read(playlists.path_for(name)))
+        return target
+
+    def copy_playlist_files(self, name, dest=None):
+        if dest is None:
+            dest = QFileDialog.getExistingDirectory(self, f"Copy the files of {name} to")
+        if not dest:
+            return None
+        paths = playlists.read(playlists.path_for(name))
+        self.statusBar().showMessage(f"Copying {len(paths)} files...")
+        res = {}
+
+        def work():
+            res["r"] = playlists.copy_tracks(paths, dest)
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        while t.is_alive():   # keeps the window painting without letting a second copy start mid-way
+            QApplication.processEvents()
+            t.join(0.05)
+        copied, skipped = res.get("r", (0, len(paths)))
+        self.statusBar().showMessage(f"Copied {copied} file(s) to {dest}" + (f", {skipped} skipped (missing)" if skipped else ""), 8000)
+        return copied, skipped
+
+    def playlist_menu(self, pos):
+        it = self.pl_list.itemAt(pos)
+        m = QMenu(self)
+        if it:
+            n = it.data(Qt.UserRole)
+            m.addAction("Play", lambda: (self.open_playlist(n), self.play_view(None)))
+            m.addAction("Rename", lambda: self.pl_list.editItem(it))
+            m.addAction("Duplicate", lambda: self.duplicate_playlist(n))
+            m.addAction("Export as .m3u8...", lambda: self.export_playlist(n))
+            m.addAction("Copy files to folder...", lambda: self.copy_playlist_files(n))
+            m.addSeparator()
+            m.addAction("Delete (to Recycle Bin)", lambda: self.delete_playlist(n))
+            m.addSeparator()
+        m.addAction("New playlist", lambda: self.new_playlist())
+        m.exec(self.pl_list.viewport().mapToGlobal(pos))
 
     def video_toggled(self, on):
         self.video.setVisible(on)
@@ -867,7 +1245,9 @@ class Window(QMainWindow):
         if not self.btn_video.isChecked():
             self.btn_video.setChecked(True)
         self.was_max = self.isMaximized()
-        self.full_hidden = [w for w in (self.topbar, self.tree, self.list, self.bar, self.statusBar()) if w.isVisible()]
+        if self.compact_from is not None:
+            self.toggle_compact()
+        self.full_hidden = [w for w in (self.topbar, self.left, self.list, self.bar, self.statusBar()) if w.isVisible()]
         for w in self.full_hidden:
             w.hide()
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -929,10 +1309,16 @@ class Window(QMainWindow):
         if path != self.cur_path:
             self.cur_path = path
             self.wave.set_track(path)
+            self.show_media_buttons(path)
             if path:
                 self.analyzer.request(path)
-                if os.path.splitext(path)[1][1:].lower() in VIDEO and not self.btn_video.isChecked():
-                    self.btn_video.setChecked(True)   # only on a new track, so V can still hide it
+                if os.path.splitext(path)[1][1:].lower() in VIDEO:
+                    if self.compact_from is not None:
+                        self.toggle_compact()   # video needs the big window
+                    if not self.btn_video.isChecked():
+                        self.btn_video.setChecked(True)   # only on a new track, so V can still hide it
+                elif self.btn_video.isChecked() and self.full_hidden is None:
+                    self.btn_video.setChecked(False)   # audio: no empty black pane
         if path:
             name = os.path.basename(path)
             self.now.setText(f"{name}    ({idx + 1} / {len(self.queue)})")
@@ -952,10 +1338,13 @@ class Window(QMainWindow):
     def closeEvent(self, ev):
         if self.full_hidden is not None:
             self.toggle_full()   # save the normal window, not the fullscreen one
+        if self.compact_from is not None:
+            self.toggle_compact()
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("hsplit", self.hsplit.saveState())
         s.setValue("vsplit", self.vsplit.saveState())
+        s.setValue("lsplit", self.left.saveState())
         s.setValue("header5", self.list.header().saveState())
         s.setValue("volume", self.vol.value())
         if self.cwd:

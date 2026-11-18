@@ -71,7 +71,7 @@ def test_f16_hand_off_false_without_server():
     assert cd.hand_off(None) is False
 
 
-@pytest.mark.window   # holds the real app mutex for a few seconds: not on a PC in use
+@pytest.mark.sandbox   # holds the real app mutex: never on a PC where Cratedig may be running
 def test_f2_second_claim_loses(qapp, monkeypatch):
     """The first launch owns the mutex; a racing second launch must not build a window."""
     code = ("import sys; sys.path.insert(0, %r); import cratedig as cd; from PySide6.QtCore import QCoreApplication;"
@@ -164,7 +164,7 @@ def test_f27_backspace_at_root_keeps_forward_history(make_window, tmp_path):
 
 # ---------- pass 2
 
-@pytest.mark.window   # holds the real app mutex for a moment
+@pytest.mark.sandbox   # holds the real app mutex: never on a PC where Cratedig may be running
 def test_p2_1_mutex_free_after_holder_exits(qapp):
     """A launch that lost the claim lets go of its handle, so it can claim once the old window has exited."""
     code = ("import sys; sys.path.insert(0, %r); import cratedig as cd; from PySide6.QtCore import QCoreApplication;"
