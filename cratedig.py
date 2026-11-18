@@ -259,13 +259,18 @@ class DirModel(QAbstractTableModel):
         return [e.path for e in self.entries]
 
     # drag and drop: files drag out of any view as file URLs; a playlist view accepts files and reorders
+    _ITEM = Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemNeverHasChildren
+    _FLAGS = {   # precomputed: views ask for flags tens of thousands of times in a big folder
+        (True, False): _ITEM,
+        (True, True): _ITEM | Qt.ItemIsDropEnabled,
+        (False, False): _ITEM | Qt.ItemIsDragEnabled,
+        (False, True): _ITEM | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled,
+    }
+
     def flags(self, index):
-        f = super().flags(index)
-        if index.isValid() and not self.entries[index.row()].is_dir:
-            f |= Qt.ItemIsDragEnabled
-        if self.pl_mode:
-            f |= Qt.ItemIsDropEnabled
-        return f
+        if not index.isValid():
+            return Qt.ItemIsDropEnabled if self.pl_mode else Qt.NoItemFlags
+        return self._FLAGS[(self.entries[index.row()].is_dir, self.pl_mode)]
 
     def mimeTypes(self):
         return ["text/uri-list", self.ROWS_MIME]
