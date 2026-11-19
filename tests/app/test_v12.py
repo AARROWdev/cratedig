@@ -341,7 +341,7 @@ def test_w2_offline_roots_share_one_deadline(monkeypatch):
     assert time.monotonic() - t < 2.0 and got == {"A:\\": False, "B:\\": False, "C:\\": False}
 
 
-def test_v5_w1_w8_encodings_urls_and_file_urls(make_window, media, tmp_path):
+def test_v5_w1_encodings_urls_and_file_lines_kept(make_window, media, tmp_path):
     d = crate(media, tmp_path)
     w = make_window(d)
     url = "http://radio.example/stream.mp3"
@@ -521,7 +521,7 @@ def test_z_file_links_always_kept_verbatim(tmp_path):
     got = pl.read(p)
     assert got == lines
     pl.write(p, got)
-    assert pl.read(p) == lines   # round-trips byte for byte
+    assert open(p, "rb").read() == ("#EXTM3U\n" + "\n".join(lines) + "\n").encode()   # byte for byte
 
 
 def test_y2_file_lines_never_touch_the_disk(tmp_path, monkeypatch):
@@ -532,7 +532,8 @@ def test_y2_file_lines_never_touch_the_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(pl.os.path, "isfile", lambda q: calls.append(q) or False)
     monkeypatch.setattr(pl.os.path, "exists", lambda q: calls.append(q) or False)
     monkeypatch.setattr(pl.os, "stat", lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(OSError()))
-    pl.read(p)
+    for line in pl.read(p) + ["file:///D:/Music/a%20b.mp3", "file://nas/music/a.mp3"]:
+        pl.local_path(line)
     assert calls == []
 
 
@@ -561,14 +562,79 @@ def test_flags_drag_and_drop():
 
 
 
-def test_z5_missing_rows_drag_no_urls(make_window, media, tmp_path):
+def test_z5_link_rows_drag_no_urls(make_window, media, tmp_path):
     d = crate(media, tmp_path)
     w = make_window(d)
     a = os.path.join(d, "tone wav.wav")
-    pl.write(pl.path_for("Z5"), ["file:///D:/gone.mp3", a, os.path.join(d, "gone.mp3")])
+    pl.write(pl.path_for("Z5"), ["file:///D:/Track #1.mp3", a, os.path.join(d, "gone.mp3")])
     w.pl_list.refresh()
     w.open_playlist("Z5")
     m = w.model
     md = m.mimeData([m.index(r, 0) for r in range(3)])
-    assert [os.path.normpath(u.toLocalFile()) for u in md.urls()] == [a]
+    assert [os.path.normpath(u.toLocalFile()) for u in md.urls()] == [a, os.path.join(d, "gone.mp3")]   # a missing file still drags (AA3)
     assert bytes(md.data(m.ROWS_MIME)) == b"0,1,2"   # reordering still moves every row
+
+
+# ---------- 1.2 review pass 6 (AA1-AA3)
+
+def test_aa1_wellformed_file_link_plays_and_saves_unchanged(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone mp3.mp3")
+    link = QUrl.fromLocalFile(a).toString(QUrl.FullyEncoded)   # file:///C:/.../tone%20mp3.mp3, as VLC writes it
+    assert "%20" in link and pl.local_path(link) == os.path.normpath(a)
+    with open(pl.path_for("Vlc"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("#EXTM3U\n" + link + "\n")
+    w.pl_list.refresh()
+    assert w.open_playlist("Vlc")
+    e = w.model.entries[0]
+    assert e.path == os.path.normpath(a) and e.name == "tone mp3.mp3" and not e.missing and e.media
+    w.add_to_playlist("Vlc", [os.path.join(d, "tone wav.wav")])
+    assert pl.read(pl.path_for("Vlc"))[0] == link   # saved back exactly as written
+    w.duplicate_playlist("Vlc")
+    assert pl.read(pl.path_for("Vlc copy"))[0] == link
+    w.open_playlist("Vlc")
+    w.play_view(None)
+    wait_playing(w, os.path.normpath(a))
+    assert w.queue[0] == os.path.normpath(a)
+
+
+def test_aa1_local_path_strict():
+    assert pl.local_path("file:///D:/Music/a%20b.mp3") == "D:\\Music\\a b.mp3"
+    assert pl.local_path("file://nas/music/a.mp3") == "\\\\nas\\music\\a.mp3"
+    for bad in ["file:rel.mp3", "file:/C:/a.mp3", "file:///D:/Track #1.mp3", "file:///D:/a?b.mp3", "file:///D:/a%00b.mp3",
+                "file:///D:/a%0Ab.mp3", "file://localhost/C:/a.mp3", "file://D:/a.mp3", "file:///D:/Music/", "file:///",
+                "file:///D:/x%AB.mp3", "http://x/a.mp3", "D:\\a.mp3"]:
+        assert pl.local_path(bad) is None, bad
+
+
+def test_aa2_copy_counts_unresolvable_links_as_missing(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone mp3.mp3")
+    good = QUrl.fromLocalFile(os.path.join(d, "tone wav.wav")).toString(QUrl.FullyEncoded)
+    with open(pl.path_for("Mix"), "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n" + a + "\n" + good + "\nfile:///D:/Track #1.mp3\nhttp://radio.example/s.mp3\n")
+    out = tmp_path / "out"
+    out.mkdir()
+    assert w.copy_playlist_files("Mix", str(out)) == (2, 2, 0)
+    assert sorted(os.listdir(out)) == ["tone mp3.mp3", "tone wav.wav"]
+
+
+def test_aa3_dead_and_no_access_rows_still_drag(monkeypatch, tmp_path):
+    m = cd.DirModel()
+    gone = str(tmp_path / "asleep.mp3")
+    locked = str(tmp_path / "locked.mp3")
+    def denied(self):
+        raise PermissionError("denied")
+    m.beginResetModel()
+    m.pl_mode = True
+    rows = [cd.Entry(cd.PathEntry(gone, dead=True))]
+    monkeypatch.setattr(cd.PathEntry, "stat", denied)
+    rows += [cd.Entry(cd.PathEntry(locked)), cd.Entry(cd.PathEntry("file:///D:/Track #1.mp3")),
+             cd.Entry(cd.PathEntry("http://radio.example/s.mp3"))]
+    m.set_entries(rows)
+    assert all(e.missing for e in m.entries)
+    md = m.mimeData([m.index(r, 0) for r in range(4)])
+    assert [os.path.normpath(u.toLocalFile()) for u in md.urls()] == [gone, locked]   # links drag no URL
+    assert bytes(md.data(m.ROWS_MIME)) == b"0,1,2,3"   # every row still reorders

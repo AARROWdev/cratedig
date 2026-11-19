@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import QStandardPaths, Qt, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 EXT = ".m3u8"
@@ -11,6 +11,27 @@ BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
 
 DIR = None   # tests point this at a temp folder
+
+# a strict drive (file:///D:/...) or UNC (file://server/share/...) file URL to a file, not a folder
+FILE_URL = re.compile(r"file:(///[A-Za-z]:/|//(?!localhost/)[^/:@]+/[^/]+/)[^\x00-\x1f]*[^/\x00-\x1f]\Z", re.I)
+
+
+def is_link(p):
+    """A playlist line that is a stream URL or a file: link, not a plain path."""
+    return "://" in p or p.lower().startswith("file:")
+
+
+def local_path(line):
+    """The local path a file: link points to, or None when it can't be converted losslessly.
+    QUrl only, no disk access. The link itself is always what gets saved back."""
+    if not line.lower().startswith("file:") or not FILE_URL.match(line) or "#" in line or "?" in line:
+        return None
+    u = QUrl(line)
+    local = u.toLocalFile() if u.isValid() else ""
+    if (not local or "\ufffd" in local or any(c < " " for c in local) or QUrl.fromLocalFile(local).toString(
+            QUrl.FullyEncoded).casefold() != u.toString(QUrl.FullyEncoded).casefold()):
+        return None
+    return os.path.normpath(local)
 
 
 def folder():
@@ -68,10 +89,9 @@ def read(path):
         line = line.strip()
         if not line or line.startswith("#") or "\x00" in line:
             continue
-        if line.lower().startswith("file:") or "://" in line:
-            # file: links and stream URLs are kept exactly as written (shown as missing, written back unchanged).
-            # Converting file: URLs safely has too many lossy edge cases (%00, localhost, file://D:/, folders),
-            # and a playlist line must never come back changed.
+        if is_link(line):
+            # file: links and stream URLs are kept exactly as written, so a playlist line never comes back
+            # changed. The app plays a file: link through local_path() when it converts losslessly.
             out.append(line)
             continue
         p = line if os.path.isabs(line) else os.path.join(base, line)

@@ -142,18 +142,18 @@ class DurationWorker(QObject):
             self.finished.emit(gen)
 
 
-def is_link(p):
-    """A playlist line kept as written (a stream URL or a file: link that couldn't be converted), not a path."""
-    return "://" in p or p.lower().startswith("file:")
+is_link = playlists.is_link
 
 
 class PathEntry:
     """os.DirEntry look-alike for a path from a playlist (which may no longer exist)."""
 
     def __init__(self, path, dead=False):
-        self.path = path
-        self.name = os.path.basename(path.rstrip("/")) if is_link(path) else os.path.basename(path)
-        self.dead = dead or is_link(path)
+        self.line = path   # what the playlist holds and gets saved back, unchanged
+        self.path = (playlists.local_path(path) or path) if path.lower().startswith("file:") else path
+        p = self.path
+        self.name = os.path.basename(p.rstrip("/")) if is_link(p) else os.path.basename(p)
+        self.dead = dead or is_link(p)
 
     def is_dir(self):
         return False
@@ -165,11 +165,12 @@ class PathEntry:
 
 
 class Entry:
-    __slots__ = ("name", "path", "is_dir", "size", "mtime", "ext", "key", "dur", "fold", "missing", "why")
+    __slots__ = ("name", "path", "line", "is_dir", "size", "mtime", "ext", "key", "dur", "fold", "missing", "why")
 
     def __init__(self, de):
         self.name = de.name
         self.path = de.path
+        self.line = getattr(de, "line", de.path)   # a playlist row saves its original line
         self.dur = None
         self.missing = False
         self.why = ""
@@ -242,11 +243,13 @@ class DirModel(QAbstractTableModel):
         return err
 
     def load_playlist(self, paths):
-        roots = dirs_alive({os.path.splitdrive(p)[0] + "\\" for p in paths if not is_link(p)}, 2.0)
+        pes = [PathEntry(p) for p in paths]
+        roots = dirs_alive({os.path.splitdrive(pe.path)[0] + "\\" for pe in pes if not is_link(pe.path)}, 2.0)
+        for pe in pes:
+            pe.dead = pe.dead or not roots[os.path.splitdrive(pe.path)[0] + "\\"]
         self.beginResetModel()
         self.pl_mode = True
-        self.set_entries([Entry(PathEntry(p, dead=not is_link(p) and not roots[os.path.splitdrive(p)[0] + "\\"]))
-                          for p in paths])
+        self.set_entries([Entry(pe) for pe in pes])
 
     def set_entries(self, items, reset=False):
         if reset:
@@ -262,7 +265,7 @@ class DirModel(QAbstractTableModel):
             self.rows.setdefault(e.path, []).append(i)   # a playlist can hold the same file twice
 
     def paths(self):
-        return [e.path for e in self.entries]
+        return [e.line for e in self.entries]   # original lines: a file: link is saved exactly as it was
 
     # drag and drop: files drag out of any view as file URLs; a playlist view accepts files and reorders
     _ITEM = Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemNeverHasChildren
@@ -290,7 +293,7 @@ class DirModel(QAbstractTableModel):
     def mimeData(self, indexes):
         rows = sorted({ix.row() for ix in indexes if ix.isValid() and not self.entries[ix.row()].is_dir})
         md = QMimeData()
-        md.setUrls([QUrl.fromLocalFile(self.entries[r].path) for r in rows if not self.entries[r].missing])
+        md.setUrls([QUrl.fromLocalFile(self.entries[r].path) for r in rows if not is_link(self.entries[r].path)])
         if self.pl_mode:
             md.setData(self.ROWS_MIME, ",".join(map(str, rows)).encode())
         return md
@@ -1233,7 +1236,7 @@ class Window(QMainWindow):
             self.statusBar().showMessage("A copy is already running", 4000)
             return None
         try:
-            paths = [p for p in playlists.read(playlists.path_for(name)) if not is_link(p)]
+            paths = [playlists.local_path(p) or p for p in playlists.read(playlists.path_for(name))]   # links count as missing
         except OSError as e:
             self.statusBar().showMessage(f"Can't read {name}: {e.strerror or e}", 8000)
             return None
