@@ -29,9 +29,9 @@ APP = "Cratedig"
 VERSION = "1.2"
 
 AUDIO = {"wav", "mp3", "flac", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus", "wma", "alac",
-         "ape", "wv", "mka"}
+         "ape", "wv", "mka", "m4b", "mp2", "aifc"}
 VIDEO = {"mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg", "ts", "m2ts",
-         "3gp", "vob", "ogv"}
+         "3gp", "vob", "ogv", "mts", "3g2"}
 MEDIA = AUDIO | VIDEO
 
 
@@ -1323,13 +1323,14 @@ class Window(QMainWindow):
 
     def add_files_dialog(self, name=None):
         """+ on the playlist panel: browse to audio/video files and add them to the selected playlist."""
-        if name is None:
-            it = self.pl_list.currentItem()
-            name = it.data(Qt.UserRole) if it else self.playlist
+        if name is None:   # the highlighted playlist (leaving a playlist clears the highlight but not currentItem)
+            sel = self.pl_list.selectedItems()
+            name = sel[0].data(Qt.UserRole) if sel else self.playlist
         if not name:
             self.statusBar().showMessage("Select a playlist first", 4000)
             return 0
-        start = getattr(self, "cwd", "") if os.path.isdir(getattr(self, "cwd", "") or "") else ""
+        cwd = getattr(self, "cwd", "") or ""
+        start = cwd if cwd and isdir_within(cwd, 2.0) else ""   # an offline share must not freeze the + button
         pats = " ".join("*." + e for e in sorted(MEDIA))
         files, _ = QFileDialog.getOpenFileNames(self, f"Add files to {name}", start,
                                                 f"Audio and video ({pats});;All files (*)")

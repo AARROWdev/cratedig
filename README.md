@@ -34,6 +34,7 @@ The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn
 ## What it does
 ### Explorer
 - Folder tree on the left, big file list in the middle
+- Shows folders and the audio/video files it can play; other files (images, project files, text) are hidden
 - Columns: **name, type, length, size, date**. Click one to sort; folders always stay on top.
 - **Length** of every audio and video file, filled in on a background thread so the window never waits
 - Names sort like Explorer, so `Track 2` comes before `Track 10`
@@ -49,7 +50,8 @@ The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn
 ### Playlists
 - A **Playlists** panel under the folder tree: click one to see its tracks in the big list, with the same columns
 - **Drag files** from the list onto a playlist to add them, or into an open playlist at any spot; drag inside a playlist to reorder
-- Right-click a playlist: Play, Rename, Duplicate, Export as .m3u8, **Copy files to folder** (e.g. a USB stick; never overwrites), Delete (to the Recycle Bin)
+- **+** adds files to the selected playlist through a file picker; **New** makes a playlist
+- Right-click a playlist: Play, Add files..., Rename, Duplicate, Export as .m3u8, **Copy files to folder** (e.g. a USB stick; never overwrites), Delete (to the Recycle Bin)
 - In a playlist: Remove from playlist (Delete key; the file stays on disk), Show in Explorer, Copy Full Path
 - Saved as plain `.m3u8` files in `Music\Cratedig Playlists`, so other players open them too. A file that was moved or deleted shows greyed out and is skipped.
 

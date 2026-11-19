@@ -824,8 +824,7 @@ def test_plus_adds_picked_files_to_selected_playlist(make_window, media, tmp_pat
     a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
     w.new_playlist("Plus", edit=False)
     w.leave_playlist()
-    w.pl_list.setCurrentItem(None)
-    assert w.add_files_dialog() == 0 and w.statusBar().currentMessage() == "Select a playlist first"
+    assert w.add_files_dialog() == 0 and w.statusBar().currentMessage() == "Select a playlist first"   # left: nothing highlighted
     w.pl_list.setCurrentItem(w.pl_list.item_named("Plus"))
     seen = {}
     def pick(parent, title, start, filt):
@@ -847,3 +846,17 @@ def test_folder_view_hides_unplayable_files(make_window, tmp_path):
         open(os.path.join(d, n), "wb").close()
     w = make_window(d)
     assert sorted(e.name for e in w.model.entries) == ["clip.MP4", "song.mp3", "sub"]
+
+
+def test_plus_never_waits_on_an_offline_folder(make_window, media, tmp_path, monkeypatch):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("Off", edit=False)
+    w.cwd = r"\\deadhost\share\music"
+    calls = []
+    monkeypatch.setattr(cd, "isdir_within", lambda p, s: calls.append((p, s)) or False)
+    monkeypatch.setattr(cd.os.path, "isdir", lambda p: (_ for _ in ()).throw(AssertionError("blocking isdir " + p)))
+    seen = {}
+    monkeypatch.setattr(cd.QFileDialog, "getOpenFileNames", staticmethod(lambda parent, t, start, f: seen.update(start=start) or ([], "")))
+    assert w.add_files_dialog() == 0
+    assert calls == [(w.cwd, 2.0)] and seen["start"] == ""
