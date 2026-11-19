@@ -553,7 +553,8 @@ def test_flags_drag_and_drop():
             return os.stat_result((0,) * 10)
     m.beginResetModel()
     m.set_entries([cd.Entry(DE("f.mp3", False)), cd.Entry(DE("sub", True))])
-    f, d = m.flags(m.index(0, 0)), m.flags(m.index(1, 0))
+    row = {e.name: i for i, e in enumerate(m.entries)}   # the model sorts: folders first
+    f, d = m.flags(m.index(row["f.mp3"], 0)), m.flags(m.index(row["sub"], 0))
     assert f & Qt.ItemIsDragEnabled and not d & Qt.ItemIsDragEnabled
     assert f & Qt.ItemIsSelectable and f & Qt.ItemIsEnabled
     assert not m.flags(QModelIndex()) & Qt.ItemIsDropEnabled

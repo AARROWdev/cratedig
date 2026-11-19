@@ -144,7 +144,7 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     assert len(w.model.entries) == 20000
     # cached revisit: opens in time, and the 20,000 known lengths never freeze the window for long
     for e in w.model.entries:
-        cd.DurationWorker.cache[(e.path, e.size, e.mtime)] = 1.0
+        cd.DurationWorker.cache[(e.path, e.size, e.mtime)] = float((20000 - int(e.name[:5])) % 997)   # varied lengths
     w.navigate(str(tmp_path))
     h.pump(0)
     done = []
@@ -159,7 +159,7 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
         h.pump(0)
         worst = max(worst, time.monotonic() - s)
     assert done, "lengths never finished"
-    assert all(e.dur == 1.0 for e in w.model.entries)
+    assert all(e.dur == float((20000 - int(e.name[:5])) % 997) for e in w.model.entries)
     assert worst < 1.0, worst   # the one length update, after the open: short, the window keeps responding
     # sorted by Length the same update re-sorts all 20,000 rows: slower, but never a hang (spec: 5 s)
     w.navigate(str(tmp_path))
@@ -175,9 +175,10 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
         h.pump(0)
         worst = max(worst, time.monotonic() - s)
     assert done and worst < 5, worst
-    assert all(e.dur == 1.0 for e in w.model.entries)
-    durs = [e.dur for e in w.view_entries()]
-    assert durs == sorted(durs)
+    assert all(e.dur == float((20000 - int(e.name[:5])) % 997) for e in w.model.entries)
+    view = w.view_entries()
+    durs = [e.dur for e in view]
+    assert durs == sorted(durs) and [e.name for e in view] != sorted(e.name for e in view)   # really in Length order
     w.close()   # stops the length worker (closeEvent bumps its generation)
 
 

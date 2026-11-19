@@ -257,10 +257,46 @@ class DirModel(QAbstractTableModel):
         self.pl_mode = True
         self.set_entries([Entry(pe) for pe in pes])
 
+    sort_col, sort_order = 0, Qt.AscendingOrder
+
+    @staticmethod
+    def sort_key(col):
+        if col == 1:
+            return lambda e: (e.ext, e.key)
+        if col == 2:
+            return lambda e: (max(e.dur or 0, 0), e.key)   # failed probe (-1) sorts with blanks
+        if col == 3:
+            return lambda e: (e.size, e.key)
+        if col == 4:
+            return lambda e: (e.mtime, e.key)
+        return lambda e: e.key
+
+    def sorted_entries(self, items):
+        """Folders first in either direction, then by the sort column, ties by natural name. One Python sort of
+        precomputed keys: a 20,000-file folder sorts in a few ms (the proxy's per-compare lessThan took ~1 s)."""
+        if self.pl_mode or self.sort_col < 0:
+            return items   # playlist order
+        k, desc = self.sort_key(self.sort_col), self.sort_order == Qt.DescendingOrder
+        return (sorted((e for e in items if e.is_dir), key=k, reverse=desc)
+                + sorted((e for e in items if not e.is_dir), key=k, reverse=desc))
+
+    def sort_by(self, col, order):
+        self.sort_col, self.sort_order = col, order
+        if self.pl_mode or col < 0 or not self.entries:
+            return
+        self.layoutAboutToBeChanged.emit()
+        old = self.persistentIndexList()
+        olds = [(ix, self.entries[ix.row()]) for ix in old if ix.isValid() and ix.row() < len(self.entries)]
+        self.entries = self.sorted_entries(self.entries)
+        self.reindex()
+        pos = {id(e): i for i, e in enumerate(self.entries)}
+        self.changePersistentIndexList([ix for ix, _ in olds], [self.index(pos[id(e)], ix.column()) for ix, e in olds])
+        self.layoutChanged.emit()
+
     def set_entries(self, items, reset=False):
         if reset:
             self.beginResetModel()
-        self.entries = items
+        self.entries = self.sorted_entries(items)
         self.reindex()
         self.endResetModel()
         self.durs.start(items)
@@ -388,6 +424,8 @@ class DirModel(QAbstractTableModel):
                 hi = r if hi is None else max(hi, r)
         if lo is not None:
             self.dataChanged.emit(self.index(lo, 2), self.index(hi, 2))
+            if self.sort_col == 2 and not self.pl_mode:
+                self.sort_by(2, self.sort_order)   # sorted by Length: one re-sort for the whole batch
 
     def icon_for(self, e):
         k = "<dir>" if e.is_dir else e.ext
@@ -446,33 +484,25 @@ class DirModel(QAbstractTableModel):
 
 
 class SortProxy(QSortFilterProxyModel):
-    """Folders first in either direction, then by column, ties by natural name."""
+    """Filters; sorting is done by DirModel.sort_by (the view's sort requests are forwarded there, and the
+    proxy itself keeps the model's order). Folders first in either direction, then by column, natural names."""
     _m = None
+    _col, _order = 0, Qt.AscendingOrder
+
+    def sort(self, column, order=Qt.AscendingOrder):
+        self._col, self._order = column, order
+        self._m.sort_by(column, order)
+        super().sort(-1)
+
+    def sortColumn(self):
+        return self._col
+
+    def sortOrder(self):
+        return self._order
 
     def setSourceModel(self, m):
-        self._m = m   # lessThan runs ~150,000 times on a 20,000-file folder: no wrapper calls or dicts per compare
+        self._m = m
         super().setSourceModel(m)
-
-    def lessThan(self, left, right):
-        e = self._m.entries
-        a, b = e[left.row()], e[right.row()]
-        if a.is_dir != b.is_dir:
-            return a.is_dir == (self.sortOrder() == Qt.AscendingOrder)
-        c = left.column()
-        if c:
-            if c == 1:
-                ka, kb = a.ext, b.ext
-            elif c == 2:
-                ka, kb = max(a.dur or 0, 0), max(b.dur or 0, 0)   # failed probe (-1) sorts with blanks
-            elif c == 3:
-                ka, kb = a.size, b.size
-            elif c == 4:
-                ka, kb = a.mtime, b.mtime
-            else:
-                ka = kb = 0
-            if ka != kb:
-                return ka < kb
-        return a.key < b.key
 
     text = ""   # raw filter text, casefolded (setFilterFixedString would hand back an escaped pattern)
 
