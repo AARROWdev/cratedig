@@ -414,6 +414,7 @@ def test_v3_v9_delete_lands_in_recycle_bin(make_window, media, tmp_path):
     import subprocess
     d = crate(media, tmp_path)
     w = make_window(d)
+    h.wait_until(lambda: h.lengths_done(w), 30, "lengths filled")   # ffmpeg must not still hold a file while we delete it
     w.new_playlist("BinMe", edit=False)
     shutil.rmtree(d)   # the folder behind the open playlist is gone (v9)
     assert w.delete_playlist("BinMe")
