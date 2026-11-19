@@ -855,8 +855,16 @@ def test_plus_never_waits_on_an_offline_folder(make_window, media, tmp_path, mon
     w.cwd = r"\\deadhost\share\music"
     calls = []
     monkeypatch.setattr(cd, "isdir_within", lambda p, s: calls.append((p, s)) or False)
-    monkeypatch.setattr(cd.os.path, "isdir", lambda p: (_ for _ in ()).throw(AssertionError("blocking isdir " + p)))
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(cd.os.path, "isdir", lambda p: (_ for _ in ()).throw(AssertionError("blocking isdir " + p)) if p == w.cwd else real_isdir(p))
     seen = {}
     monkeypatch.setattr(cd.QFileDialog, "getOpenFileNames", staticmethod(lambda parent, t, start, f: seen.update(start=start) or ([], "")))
     assert w.add_files_dialog() == 0
-    assert calls == [(w.cwd, 2.0)] and seen["start"] == ""
+    assert calls == [(w.cwd, 2.0)] and seen["start"] == os.path.expanduser("~")
+
+
+def test_installer_open_with_covers_every_playable_type():
+    import re
+    iss = open(os.path.join(os.path.dirname(cd.__file__), "installer", "cratedig.iss"), encoding="utf-8").read()
+    exts = set(re.search(r'#define Exts "([^"]+)"', iss).group(1).split())
+    assert exts == cd.MEDIA

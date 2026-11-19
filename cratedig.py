@@ -1131,6 +1131,9 @@ class Window(QMainWindow):
             return
         self.playlist = None
         self.pl_list.clearSelection()
+        self.pl_list.blockSignals(True)
+        self.pl_list.setCurrentItem(None)   # a later refresh() must not re-highlight the playlist that was left
+        self.pl_list.blockSignals(False)
         self.list.setSortingEnabled(True)
         col, order = getattr(self, "folder_sort", (0, Qt.AscendingOrder))
         self.list.sortByColumn(col, order)
@@ -1330,7 +1333,8 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Select a playlist first", 4000)
             return 0
         cwd = getattr(self, "cwd", "") or ""
-        start = cwd if cwd and isdir_within(cwd, 2.0) else ""   # an offline share must not freeze the + button
+        # an offline share must not freeze the + button; "" would reopen the picker's remembered (maybe offline) folder
+        start = cwd if cwd and isdir_within(cwd, 2.0) else os.path.expanduser("~")
         pats = " ".join("*." + e for e in sorted(MEDIA))
         files, _ = QFileDialog.getOpenFileNames(self, f"Add files to {name}", start,
                                                 f"Audio and video ({pats});;All files (*)")
