@@ -754,7 +754,7 @@ def test_ee1_save_error_stays_on_screen(make_window, media, tmp_path):
         assert w.add_to_playlist("RO", [b]) == 1
         h.pump(100)
         assert w.save_label.isVisibleTo(w) and w.save_label.text().startswith("Couldn't save playlist RO")
-        assert "Added" not in w.statusBar().currentMessage()   # FF3: no "Added 1" for an edit that wasn't saved
+        assert w.statusBar().currentMessage().startswith("Added 1 to RO, not saved")   # FF3/GG1
         w.update_status()
         w.statusBar().showMessage("x", 10)   # FF1: any other message, and its timeout, leave it alone
         h.pump(200)
@@ -788,3 +788,29 @@ def test_ff2_switching_playlist_clears_the_old_warning(make_window, media, tmp_p
         assert not w.save_label.isVisibleTo(w) and w.save_error == ""
     finally:
         os.chmod(pl.path_for("A"), stat.S_IREAD | stat.S_IWRITE)
+
+
+# ---------- 1.2 review pass 12 (GG1)
+
+def test_gg1_notes_with_a_standing_save_error(make_window, media, tmp_path, monkeypatch):
+    import stat
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    local = [os.path.join(d, n) for n in ("tone wav.wav", "tone mp3.mp3", "tone flac.flac")]
+    dead = [r"\\nas\music\a.mp3", r"\\nas\music\b.mp3"]
+    monkeypatch.setattr(cd, "dirs_alive", lambda roots, s: {r: not r.startswith("\\\\") for r in roots})
+    pl.write(pl.path_for("RO"), [])
+    w.pl_list.refresh()
+    assert w.open_playlist("RO")
+    os.chmod(pl.path_for("RO"), stat.S_IREAD)
+    try:
+        assert w.add_to_playlist("RO", local + dead) == 3
+        h.pump(100)
+        assert w.statusBar().currentMessage().startswith("Added 3 to RO, not saved (2 not reachable)")
+        assert w.add_to_playlist("RO", dead) == 0   # nothing tried to save: the plain note shows
+        h.pump(100)
+        assert w.statusBar().currentMessage().startswith("Nothing added (2 not reachable)")
+        assert w.save_label.isVisibleTo(w)
+        assert w.save_label.maximumWidth() == 360 and w.save_label.toolTip() == w.save_error
+    finally:
+        os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)

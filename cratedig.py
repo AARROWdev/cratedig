@@ -598,6 +598,7 @@ class Window(QMainWindow):
         self.save_label = QLabel()   # a permanent status widget: no other status message can cover it
         self.save_label.setStyleSheet("color: #e05050; font-weight: bold")
         self.statusBar().addPermanentWidget(self.save_label)
+        self.save_label.setMaximumWidth(360)   # a long playlist name can't force the window wider
         self.save_label.hide()
         self.proxy.layoutChanged.connect(self.status_timer.start)   # coalesced: one count per burst of re-sorts
         self.model.durs.finished.connect(self.lengths_filled)
@@ -1112,6 +1113,7 @@ class Window(QMainWindow):
     def set_save_error(self, text):
         self.save_error = text
         self.save_label.setText(text)
+        self.save_label.setToolTip(text)
         self.save_label.setVisible(bool(text))
 
     def leave_playlist(self):
@@ -1174,9 +1176,11 @@ class Window(QMainWindow):
         why = ", ".join(s for s in (f"{dead} not reachable" if dead else "",
                                     f"{gone} missing or not a file" if gone else "") if s)
         msg = f"Added {n} to {name}" if n else "Nothing added" if why else "Only audio and video files can go in a playlist"
+        if n and self.playlist == name and self.save_error:
+            msg += ", not saved"   # the add went into the view, but the playlist file couldn't be written
         msg += f" ({why})" if why else ""
         if self.playlist == name:   # the open view's item count is redrawn next: show the note with it
-            self.status_note = "" if self.save_error else msg   # not "Added N" when it couldn't be saved
+            self.status_note = msg
             self.status_timer.start()
         else:
             self.statusBar().showMessage(msg, 4000)
@@ -1222,6 +1226,8 @@ class Window(QMainWindow):
             return old
         if self.playlist == old:
             self.playlist = new
+            if self.save_error:
+                self.set_save_error(self.save_error.replace(f"playlist {old}:", f"playlist {new}:", 1))
             self.addr.setText(f"Playlist: {new}")
         if self.queue_dir == ("playlist", old):
             self.queue_dir = ("playlist", new)
