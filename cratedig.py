@@ -508,12 +508,14 @@ def encodable(p):
 
 
 def droppable(files):
-    """(media files to add, how many were left out because their drive or share didn't answer in 2 s).
+    """(media files to add, how many were left out because their drive or share didn't answer in 2 s,
+    how many were missing or folders).
     The roots are checked first with a deadline, so an offline NAS never hangs a drop."""
     media = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
     roots = dirs_alive({os.path.splitdrive(f)[0] + "\\" for f in media}, 2.0)
     live = [f for f in media if roots[os.path.splitdrive(f)[0] + "\\"]]
-    return [f for f in live if os.path.isfile(f)], len(media) - len(live)
+    ok = [f for f in live if os.path.isfile(f)]
+    return ok, len(media) - len(live), len(live) - len(ok)
 
 
 def dirs_alive(paths, seconds):
@@ -1141,7 +1143,7 @@ class Window(QMainWindow):
             self.status_timer.start()
 
     def add_to_playlist(self, name, files):
-        files, dead = droppable(files)
+        files, dead, gone = droppable(files)
         if self.playlist == name:
             n = self.model.insert_paths(len(self.model.entries), files, checked=True)
         else:
@@ -1153,9 +1155,9 @@ class Window(QMainWindow):
                 except OSError as e:   # never write over a playlist that couldn't be read
                     self.statusBar().showMessage(f"Couldn't add to {name}: {e.strerror or e}", 8000)
                     return 0
-        self.statusBar().showMessage(f"Added {n} to {name}" if n else
-                                     f"{dead} file(s) not added: drive or share not reachable" if dead else
-                                     "Only audio and video files can go in a playlist", 4000)
+        why = ", ".join(s for s in (f"{dead} not reachable" if dead else "", f"{gone} missing" if gone else "") if s)
+        msg = f"Added {n} to {name}" if n else "Nothing added" if why else "Only audio and video files can go in a playlist"
+        self.statusBar().showMessage(msg + (f" ({why})" if why else ""), 4000)
         return n
 
     def remove_selected(self):

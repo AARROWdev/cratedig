@@ -694,6 +694,9 @@ def test_cc1_closed_playlist_drop_skips_missing_files_and_folders(make_window, m
     w.leave_playlist()
     assert w.add_to_playlist("Closed", [os.path.join(d, "gone.mp3"), folder, a]) == 1
     assert pl.read(pl.path_for("Closed")) == [a]
+    assert w.statusBar().currentMessage() == "Added 1 to Closed (2 missing)"
+    assert w.add_to_playlist("Closed", [os.path.join(d, "gone.mp3"), folder]) == 0
+    assert w.statusBar().currentMessage() == "Nothing added (2 missing)"
 
 
 def test_cc2_dead_share_drop_says_not_reachable(make_window, media, tmp_path, monkeypatch):
@@ -703,7 +706,7 @@ def test_cc2_dead_share_drop_says_not_reachable(make_window, media, tmp_path, mo
     w.new_playlist("Asleep", edit=False)
     w.leave_playlist()
     assert w.add_to_playlist("Asleep", [r"\\nas\music\a.mp3", r"\\nas\music\b.flac"]) == 0
-    assert w.statusBar().currentMessage() == "2 file(s) not added: drive or share not reachable"
+    assert w.statusBar().currentMessage() == "Nothing added (2 not reachable)"
     assert w.add_to_playlist("Asleep", [os.path.join(d, "notes.txt")]) == 0
     assert w.statusBar().currentMessage() == "Only audio and video files can go in a playlist"
 
@@ -711,3 +714,25 @@ def test_cc2_dead_share_drop_says_not_reachable(make_window, media, tmp_path, mo
 def test_cc_unc_host_with_trailing_dot_converts():
     assert pl.local_path("file://nas./share/a.mp3") == r"\\nas.\share\a.mp3"
     assert pl.local_path("file://nas/share./a.mp3") is None
+
+
+# ---------- 1.2 review pass 9 (DD1)
+
+def test_dd1_partial_drop_reports_dead_files(make_window, media, tmp_path, monkeypatch):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    local = [os.path.join(d, n) for n in ("tone wav.wav", "tone mp3.mp3", "tone flac.flac")]
+    dead = [rf"\\nas\music\{i}.mp3" for i in range(5)]
+    monkeypatch.setattr(cd, "dirs_alive", lambda roots, s: {r: not r.startswith("\\\\") for r in roots})
+    w.new_playlist("Part", edit=False)
+    w.leave_playlist()
+    assert w.add_to_playlist("Part", local + dead) == 3
+    assert w.statusBar().currentMessage() == "Added 3 to Part (5 not reachable)"
+    w.open_playlist("Part")
+    assert w.add_to_playlist("Part", dead + local[:1]) == 1   # open playlist reports the same way
+    assert w.statusBar().currentMessage() == "Added 1 to Part (5 not reachable)"
+
+
+def test_dd_device_paths_never_convert():
+    assert pl.local_path("file://./share/a.mp3") is None
+    assert pl.local_path("file://../share/a.mp3") is None
