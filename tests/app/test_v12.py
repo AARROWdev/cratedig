@@ -694,9 +694,9 @@ def test_cc1_closed_playlist_drop_skips_missing_files_and_folders(make_window, m
     w.leave_playlist()
     assert w.add_to_playlist("Closed", [os.path.join(d, "gone.mp3"), folder, a]) == 1
     assert pl.read(pl.path_for("Closed")) == [a]
-    assert w.statusBar().currentMessage() == "Added 1 to Closed (2 missing)"
+    assert w.statusBar().currentMessage() == "Added 1 to Closed (2 missing or not a file)"
     assert w.add_to_playlist("Closed", [os.path.join(d, "gone.mp3"), folder]) == 0
-    assert w.statusBar().currentMessage() == "Nothing added (2 missing)"
+    assert w.statusBar().currentMessage() == "Nothing added (2 missing or not a file)"
 
 
 def test_cc2_dead_share_drop_says_not_reachable(make_window, media, tmp_path, monkeypatch):
@@ -730,9 +730,36 @@ def test_dd1_partial_drop_reports_dead_files(make_window, media, tmp_path, monke
     assert w.statusBar().currentMessage() == "Added 3 to Part (5 not reachable)"
     w.open_playlist("Part")
     assert w.add_to_playlist("Part", dead + local[:1]) == 1   # open playlist reports the same way
-    assert w.statusBar().currentMessage() == "Added 1 to Part (5 not reachable)"
+    h.pump(100)   # the item count is redrawn after the event loop runs: the note must survive it
+    assert w.statusBar().currentMessage().startswith("Added 1 to Part (5 not reachable)  ·  4 items")
 
 
 def test_dd_device_paths_never_convert():
     assert pl.local_path("file://./share/a.mp3") is None
     assert pl.local_path("file://../share/a.mp3") is None
+
+
+# ---------- 1.2 review pass 10 (EE1-EE2)
+
+def test_ee1_save_error_stays_on_screen(make_window, media, tmp_path):
+    import stat
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
+    pl.write(pl.path_for("RO"), [a])
+    w.pl_list.refresh()
+    assert w.open_playlist("RO")
+    os.chmod(pl.path_for("RO"), stat.S_IREAD)
+    try:
+        assert w.add_to_playlist("RO", [b]) == 1
+        h.pump(100)
+        assert w.statusBar().currentMessage().startswith("Couldn't save playlist RO")
+        w.update_status()   # any later re-count (sorting, filtering) keeps it
+        assert w.statusBar().currentMessage().startswith("Couldn't save playlist RO")
+        os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)
+        w.model.remove_rows([1])   # the next save works: the error goes
+        h.pump(100)
+        assert not w.statusBar().currentMessage().startswith("Couldn't")
+        assert pl.read(pl.path_for("RO")) == [a]
+    finally:
+        os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)

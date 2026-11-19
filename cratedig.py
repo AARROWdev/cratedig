@@ -593,6 +593,8 @@ class Window(QMainWindow):
         hdr.resizeSection(2, 70)
         hdr.resizeSection(3, 90)
         self.status_timer = QTimer(self, singleShot=True, interval=0, timeout=self.update_status)
+        self.status_note = ""   # shown once by update_status, so the item count never hides it
+        self.save_error = ""    # shown until the open playlist saves again
         self.proxy.layoutChanged.connect(self.status_timer.start)   # coalesced: one count per burst of re-sorts
         self.model.durs.finished.connect(self.lengths_filled)
         self.queue_dir = None
@@ -935,7 +937,10 @@ class Window(QMainWindow):
     def update_status(self):
         ents = self.view_entries()
         media = sum(1 for e in ents if e.media)
-        self.statusBar().showMessage(f"{len(ents)} items  ·  {media} playable")
+        text = f"{len(ents)} items  ·  {media} playable"
+        note, self.status_note = self.status_note, ""
+        parts = [p for p in (self.save_error, note) if p]
+        self.statusBar().showMessage("  ·  ".join(parts + [text]))
 
     # ---------- list actions
     def activate(self, ix):
@@ -1102,6 +1107,7 @@ class Window(QMainWindow):
 
     # ---------- playlists
     def leave_playlist(self):
+        self.save_error = ""
         if not self.playlist:
             return
         self.playlist = None
@@ -1138,8 +1144,9 @@ class Window(QMainWindow):
         if self.playlist:
             try:
                 playlists.write(playlists.path_for(self.playlist), self.model.paths())
-            except OSError as e:
-                self.statusBar().showMessage(f"Couldn't save playlist: {e}", 8000)
+                self.save_error = ""
+            except OSError as e:   # stays on screen until a save works: unsaved edits are lost on close
+                self.save_error = f"Couldn't save playlist {self.playlist}: {e.strerror or e}"
             self.status_timer.start()
 
     def add_to_playlist(self, name, files):
@@ -1155,9 +1162,15 @@ class Window(QMainWindow):
                 except OSError as e:   # never write over a playlist that couldn't be read
                     self.statusBar().showMessage(f"Couldn't add to {name}: {e.strerror or e}", 8000)
                     return 0
-        why = ", ".join(s for s in (f"{dead} not reachable" if dead else "", f"{gone} missing" if gone else "") if s)
+        why = ", ".join(s for s in (f"{dead} not reachable" if dead else "",
+                                    f"{gone} missing or not a file" if gone else "") if s)
         msg = f"Added {n} to {name}" if n else "Nothing added" if why else "Only audio and video files can go in a playlist"
-        self.statusBar().showMessage(msg + (f" ({why})" if why else ""), 4000)
+        msg += f" ({why})" if why else ""
+        if self.playlist == name:   # the open view's item count is redrawn next: show the note with it
+            self.status_note = msg
+            self.status_timer.start()
+        else:
+            self.statusBar().showMessage(msg, 4000)
         return n
 
     def remove_selected(self):
