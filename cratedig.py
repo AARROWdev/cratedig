@@ -595,6 +595,10 @@ class Window(QMainWindow):
         self.status_timer = QTimer(self, singleShot=True, interval=0, timeout=self.update_status)
         self.status_note = ""   # shown once by update_status, so the item count never hides it
         self.save_error = ""    # shown until the open playlist saves again
+        self.save_label = QLabel()   # a permanent status widget: no other status message can cover it
+        self.save_label.setStyleSheet("color: #e05050; font-weight: bold")
+        self.statusBar().addPermanentWidget(self.save_label)
+        self.save_label.hide()
         self.proxy.layoutChanged.connect(self.status_timer.start)   # coalesced: one count per burst of re-sorts
         self.model.durs.finished.connect(self.lengths_filled)
         self.queue_dir = None
@@ -939,8 +943,7 @@ class Window(QMainWindow):
         media = sum(1 for e in ents if e.media)
         text = f"{len(ents)} items  ·  {media} playable"
         note, self.status_note = self.status_note, ""
-        parts = [p for p in (self.save_error, note) if p]
-        self.statusBar().showMessage("  ·  ".join(parts + [text]))
+        self.statusBar().showMessage(f"{note}  ·  {text}" if note else text)
 
     # ---------- list actions
     def activate(self, ix):
@@ -1106,8 +1109,13 @@ class Window(QMainWindow):
             self.show_media_buttons(self.cur_path)
 
     # ---------- playlists
+    def set_save_error(self, text):
+        self.save_error = text
+        self.save_label.setText(text)
+        self.save_label.setVisible(bool(text))
+
     def leave_playlist(self):
-        self.save_error = ""
+        self.set_save_error("")
         if not self.playlist:
             return
         self.playlist = None
@@ -1128,6 +1136,7 @@ class Window(QMainWindow):
             return False
         if not self.playlist:
             self.folder_sort = (self.proxy.sortColumn(), self.proxy.sortOrder())
+        self.set_save_error("")   # the warning was about the playlist being left
         self.playlist = name
         self.list.setSortingEnabled(False)
         self.proxy.sort(-1)   # playlist order
@@ -1144,9 +1153,9 @@ class Window(QMainWindow):
         if self.playlist:
             try:
                 playlists.write(playlists.path_for(self.playlist), self.model.paths())
-                self.save_error = ""
+                self.set_save_error("")
             except OSError as e:   # stays on screen until a save works: unsaved edits are lost on close
-                self.save_error = f"Couldn't save playlist {self.playlist}: {e.strerror or e}"
+                self.set_save_error(f"Couldn't save playlist {self.playlist}: {e.strerror or e}")
             self.status_timer.start()
 
     def add_to_playlist(self, name, files):
@@ -1167,7 +1176,7 @@ class Window(QMainWindow):
         msg = f"Added {n} to {name}" if n else "Nothing added" if why else "Only audio and video files can go in a playlist"
         msg += f" ({why})" if why else ""
         if self.playlist == name:   # the open view's item count is redrawn next: show the note with it
-            self.status_note = msg
+            self.status_note = "" if self.save_error else msg   # not "Added N" when it couldn't be saved
             self.status_timer.start()
         else:
             self.statusBar().showMessage(msg, 4000)

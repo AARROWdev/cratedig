@@ -753,13 +753,38 @@ def test_ee1_save_error_stays_on_screen(make_window, media, tmp_path):
     try:
         assert w.add_to_playlist("RO", [b]) == 1
         h.pump(100)
-        assert w.statusBar().currentMessage().startswith("Couldn't save playlist RO")
-        w.update_status()   # any later re-count (sorting, filtering) keeps it
-        assert w.statusBar().currentMessage().startswith("Couldn't save playlist RO")
+        assert w.save_label.isVisibleTo(w) and w.save_label.text().startswith("Couldn't save playlist RO")
+        assert "Added" not in w.statusBar().currentMessage()   # FF3: no "Added 1" for an edit that wasn't saved
+        w.update_status()
+        w.statusBar().showMessage("x", 10)   # FF1: any other message, and its timeout, leave it alone
+        h.pump(200)
+        assert w.save_label.isVisibleTo(w) and w.save_label.text().startswith("Couldn't save playlist RO")
         os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)
         w.model.remove_rows([1])   # the next save works: the error goes
         h.pump(100)
-        assert not w.statusBar().currentMessage().startswith("Couldn't")
+        assert not w.save_label.isVisibleTo(w) and w.save_error == ""
         assert pl.read(pl.path_for("RO")) == [a]
     finally:
         os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)
+
+
+# ---------- 1.2 review pass 11 (FF1-FF3)
+
+def test_ff2_switching_playlist_clears_the_old_warning(make_window, media, tmp_path):
+    import stat
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
+    pl.write(pl.path_for("A"), [a])
+    pl.write(pl.path_for("B"), [a])
+    w.pl_list.refresh()
+    assert w.open_playlist("A")
+    os.chmod(pl.path_for("A"), stat.S_IREAD)
+    try:
+        w.add_to_playlist("A", [b])
+        h.pump(50)
+        assert w.save_label.isVisibleTo(w)
+        assert w.open_playlist("B")
+        assert not w.save_label.isVisibleTo(w) and w.save_error == ""
+    finally:
+        os.chmod(pl.path_for("A"), stat.S_IREAD | stat.S_IWRITE)
