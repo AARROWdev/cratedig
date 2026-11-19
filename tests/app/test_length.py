@@ -32,8 +32,9 @@ def test_broken_and_non_media_are_blank(media):
     """Row 12: corrupt, 0-byte and non-media files: blank, no crash."""
     m = loaded(media[0])
     shown = {e.name: m.data(m.index(i, 2)) for i, e in enumerate(m.entries)}
-    for n in ("corrupt.mp3", "empty.wav", "notes.txt"):
+    for n in ("corrupt.mp3", "empty.wav"):
         assert shown[n] == "", n
+    assert "notes.txt" not in shown   # 1.2: non-media files are not listed at all
 
 
 def test_length_sort(media):

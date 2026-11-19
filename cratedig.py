@@ -233,6 +233,9 @@ class DirModel(QAbstractTableModel):
             with os.scandir(path) as it:
                 for de in it:
                     try:
+                        # folder view lists only folders and files Cratedig can play (no images, project files or text)
+                        if os.path.splitext(de.name)[1][1:].lower() not in MEDIA and not de.is_dir():
+                            continue
                         items.append(Entry(de))
                     except OSError:
                         pass
@@ -646,11 +649,17 @@ class Window(QMainWindow):
         pl_title.setObjectName("now")
         pl_head.addWidget(pl_title, 1)
         self.btn_new_pl = QToolButton()
-        self.btn_new_pl.setText("+")
+        self.btn_new_pl.setText("New")
         self.btn_new_pl.setToolTip("New playlist (drag files from the list onto a playlist to add them)")
         self.btn_new_pl.setAutoRaise(True)
         self.btn_new_pl.clicked.connect(lambda: self.new_playlist())
         pl_head.addWidget(self.btn_new_pl)
+        self.btn_add_pl = QToolButton()   # pick a playlist, press +, browse to files to add
+        self.btn_add_pl.setText("+")
+        self.btn_add_pl.setToolTip("Add files to the selected playlist")
+        self.btn_add_pl.setAutoRaise(True)
+        self.btn_add_pl.clicked.connect(lambda: self.add_files_dialog())
+        pl_head.addWidget(self.btn_add_pl)
         pl_panel = QWidget()
         pl_lay = QVBoxLayout(pl_panel)
         pl_lay.setContentsMargins(0, 0, 0, 0)
@@ -1312,12 +1321,29 @@ class Window(QMainWindow):
         if self.open_playlist(name):
             self.play_view(None)
 
+    def add_files_dialog(self, name=None):
+        """+ on the playlist panel: browse to audio/video files and add them to the selected playlist."""
+        if name is None:
+            it = self.pl_list.currentItem()
+            name = it.data(Qt.UserRole) if it else self.playlist
+        if not name:
+            self.statusBar().showMessage("Select a playlist first", 4000)
+            return 0
+        start = getattr(self, "cwd", "") if os.path.isdir(getattr(self, "cwd", "") or "") else ""
+        pats = " ".join("*." + e for e in sorted(MEDIA))
+        files, _ = QFileDialog.getOpenFileNames(self, f"Add files to {name}", start,
+                                                f"Audio and video ({pats});;All files (*)")
+        if not files:
+            return 0
+        return self.add_to_playlist(name, [os.path.normpath(f) for f in files])
+
     def playlist_menu(self, pos):
         it = self.pl_list.itemAt(pos)
         m = QMenu(self)
         if it:
             n = it.data(Qt.UserRole)
             m.addAction("Play", lambda: self.play_playlist(n))
+            m.addAction("Add files...", lambda: self.add_files_dialog(n))
             m.addAction("Rename", lambda: self.pl_list.editItem(it))
             m.addAction("Duplicate", lambda: self.duplicate_playlist(n))
             m.addAction("Export as .m3u8...", lambda: self.export_playlist(n))

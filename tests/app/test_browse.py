@@ -14,7 +14,8 @@ pytestmark = pytest.mark.window
 def test_listing_matches_folder(window, media):
     """Row 6: every name, size and date matches the folder."""
     d = media[0]
-    want = {de.name: de for de in os.scandir(d)}
+    want = {de.name: de for de in os.scandir(d) if de.is_dir() or os.path.splitext(de.name)[1][1:].lower() in cd.MEDIA}
+    assert "notes.txt" not in want and any(not n.endswith(".txt") for n in want)   # 1.2: only playable files are listed
     m = window.model
     assert {e.name for e in m.entries} == set(want)
     for i, e in enumerate(m.entries):
@@ -125,12 +126,13 @@ def test_access_denied_folder(make_window, tmp_path):
 
 
 @pytest.mark.big
-def test_20000_files_no_freeze(make_window, tmp_path):
+def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     """Row 9: a folder with 20,000 files opens in under 2 s."""
+    monkeypatch.setattr(cd, "probe_duration", lambda p: -1)   # 20,000 empty .mp3s: no ffmpeg probes in the background
     d = str(tmp_path / "big")
     os.makedirs(d)
     for i in range(20000):
-        open(os.path.join(d, f"{i:05d}.txt"), "wb").close()
+        open(os.path.join(d, f"{i:05d}.mp3"), "wb").close()
     w = make_window(str(tmp_path))
     t = time.monotonic()
     w.navigate(d)

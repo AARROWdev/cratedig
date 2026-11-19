@@ -814,3 +814,36 @@ def test_gg1_notes_with_a_standing_save_error(make_window, media, tmp_path, monk
         assert w.save_label.maximumWidth() == 360 and w.save_label.toolTip() == w.save_error
     finally:
         os.chmod(pl.path_for("RO"), stat.S_IREAD | stat.S_IWRITE)
+
+
+# ---------- 1.2 user testing: + adds files to a playlist; folder view lists only playable files
+
+def test_plus_adds_picked_files_to_selected_playlist(make_window, media, tmp_path, monkeypatch):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a, b = os.path.join(d, "tone wav.wav"), os.path.join(d, "tone mp3.mp3")
+    w.new_playlist("Plus", edit=False)
+    w.leave_playlist()
+    w.pl_list.setCurrentItem(None)
+    assert w.add_files_dialog() == 0 and w.statusBar().currentMessage() == "Select a playlist first"
+    w.pl_list.setCurrentItem(w.pl_list.item_named("Plus"))
+    seen = {}
+    def pick(parent, title, start, filt):
+        seen.update(title=title, start=start, filt=filt)
+        return [a.replace("\\", "/"), b], filt
+    monkeypatch.setattr(cd.QFileDialog, "getOpenFileNames", staticmethod(pick))
+    w.btn_add_pl.click()
+    assert seen["title"] == "Add files to Plus" and seen["start"] == d and "*.mp3" in seen["filt"]
+    assert pl.read(pl.path_for("Plus")) == [a, b]
+    monkeypatch.setattr(cd.QFileDialog, "getOpenFileNames", staticmethod(lambda *x: ([], "")))
+    assert w.add_files_dialog("Plus") == 0   # cancelled: nothing changes
+    assert pl.read(pl.path_for("Plus")) == [a, b]
+
+
+def test_folder_view_hides_unplayable_files(make_window, tmp_path):
+    d = str(tmp_path / "mix")
+    os.makedirs(os.path.join(d, "sub"))
+    for n in ("cover.jpg", "art.psd", "notes.txt", "song.mp3", "clip.MP4"):
+        open(os.path.join(d, n), "wb").close()
+    w = make_window(d)
+    assert sorted(e.name for e in w.model.entries) == ["clip.MP4", "song.mp3", "sub"]
