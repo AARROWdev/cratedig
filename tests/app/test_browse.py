@@ -166,14 +166,18 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     h.pump(0)
     w.list.sortByColumn(2, cd.Qt.AscendingOrder)
     done.clear()
+    s = time.monotonic()
     w.navigate(d)
-    h.pump(0)
-    worst, end = 0.0, time.monotonic() + 30
+    h.pump(0)   # a cached folder's lengths (and the full re-sort) land in this first pass: time it
+    worst, end = time.monotonic() - s, time.monotonic() + 30
     while (not done or w.model.dur_timer.isActive()) and time.monotonic() < end:
         s = time.monotonic()
         h.pump(0)
         worst = max(worst, time.monotonic() - s)
     assert done and worst < 5, worst
+    assert all(e.dur == 1.0 for e in w.model.entries)
+    durs = [e.dur for e in w.view_entries()]
+    assert durs == sorted(durs)
     w.close()   # stops the length worker (closeEvent bumps its generation)
 
 
