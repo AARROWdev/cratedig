@@ -97,7 +97,7 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 Cratedig remembers your last folder, window size, column layout, volume, view and skin. It never changes, moves or deletes your media.
 
 ## Tested in a throwaway Windows
-`tests/` holds 155 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
+`tests/` holds 161 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
 
 - **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
 - **Single instance:** five rapid launches from Windows all hand their file to the one open window
