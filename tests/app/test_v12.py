@@ -638,3 +638,45 @@ def test_aa3_dead_and_no_access_rows_still_drag(monkeypatch, tmp_path):
     md = m.mimeData([m.index(r, 0) for r in range(4)])
     assert [os.path.normpath(u.toLocalFile()) for u in md.urls()] == [gone, locked]   # links drag no URL
     assert bytes(md.data(m.ROWS_MIME)) == b"0,1,2,3"   # every row still reorders
+
+
+# ---------- 1.2 review pass 7 (BB1-BB2)
+
+def test_bb1_drag_over_panel_never_touches_the_disk(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pl.os.path, "isfile", lambda q: calls.append(q) or False)
+    monkeypatch.setattr(pl.os, "stat", lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(OSError()))
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(r"\\deadhost\share\a.mp3")])
+    class Ev:
+        def mimeData(self):
+            return md
+    assert pl.PlaylistList()._files(Ev()) == [r"\\deadhost\share\a.mp3"]
+    assert calls == []
+
+
+def test_bb1_drop_leaves_out_files_on_dead_shares(make_window, media, tmp_path, monkeypatch):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone mp3.mp3")
+    dead = r"\\deadhost\share\b.mp3"
+    seen = []
+    monkeypatch.setattr(cd, "dirs_alive", lambda roots, s: seen.append(set(roots)) or {r: not r.startswith("\\\\") for r in roots})
+    real_isfile = os.path.isfile
+    monkeypatch.setattr(cd.os.path, "isfile", lambda q: (_ for _ in ()).throw(AssertionError("stat " + q)) if q == dead else real_isfile(q))
+    w.new_playlist("Nas", edit=False)
+    w.leave_playlist()
+    assert w.add_to_playlist("Nas", [dead, a]) == 1   # closed playlist
+    assert pl.read(pl.path_for("Nas")) == [a]
+    w.open_playlist("Nas")
+    assert w.add_to_playlist("Nas", [dead, a]) == 1   # open playlist: insert_paths
+    assert [e.path for e in w.model.entries] == [a, a]
+    assert any(r.lower().startswith(r"\\deadhost") for s in seen for r in s)   # checked with the deadline
+
+
+def test_bb2_dot_segments_and_trailing_space_not_converted():
+    for bad in ["file:///D:/Music/.", "file:///D:/Music/..", "file:///D:/Music/%2E%2E", "file:///D:/x/../a.mp3",
+                "file://nas/share/.", "file:///D:/a.mp3%20", "file:///D:/a.mp3."]:
+        assert pl.local_path(bad) is None, bad
+    assert pl.local_path("file:///D:/Mu.sic/a%20b.mp3") == r"D:\Mu.sic\a b.mp3"
+    assert pl.resolve("http://x/a.mp3") is None and pl.resolve(r"D:\a.mp3") == r"D:\a.mp3"

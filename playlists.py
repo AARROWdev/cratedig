@@ -31,7 +31,18 @@ def local_path(line):
     if (not local or "\ufffd" in local or any(c < " " for c in local) or QUrl.fromLocalFile(local).toString(
             QUrl.FullyEncoded).casefold() != u.toString(QUrl.FullyEncoded).casefold()):
         return None
+    # no ./.. segments (they'd point at a folder or drive root) and no trailing space or dot (Windows strips
+    # those, so file:///D:/a.mp3%20 would play D:\a.mp3). Checked before normpath, which collapses them.
+    if any(s in (".", "..") or s.endswith((" ", ".")) for s in local.split("/")[1:]):
+        return None
     return os.path.normpath(local)
+
+
+def resolve(line):
+    """The local path a playlist line plays from, or None (a stream URL or a file: link that can't be converted)."""
+    if not is_link(line):
+        return line
+    return local_path(line)
 
 
 def folder():
@@ -204,7 +215,9 @@ class PlaylistList(QListWidget):
         md = ev.mimeData()
         if not md.hasUrls():
             return []
-        return [os.path.normpath(u.toLocalFile()) for u in md.urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
+        # no disk access here: this runs on every drag move, and a file on an offline share would block for
+        # the network timeout. What's dropped is checked once, with a deadline, in add_to_playlist.
+        return [os.path.normpath(u.toLocalFile()) for u in md.urls() if u.isLocalFile() and u.toLocalFile()]
 
     def dragEnterEvent(self, ev):
         if self._files(ev):

@@ -150,7 +150,7 @@ class PathEntry:
 
     def __init__(self, path, dead=False):
         self.line = path   # what the playlist holds and gets saved back, unchanged
-        self.path = (playlists.local_path(path) or path) if path.lower().startswith("file:") else path
+        self.path = playlists.resolve(path) or path
         p = self.path
         self.name = os.path.basename(p.rstrip("/")) if is_link(p) else os.path.basename(p)
         self.dead = dead or is_link(p)
@@ -332,7 +332,7 @@ class DirModel(QAbstractTableModel):
         return False   # added; but report "not dropped" so no drag source ever treats it as a move
 
     def insert_paths(self, row, files):
-        files = [f for f in files if os.path.isfile(f) and os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+        files = [f for f in playable_alive(files) if os.path.isfile(f)]
         if not files:
             return 0
         row = max(0, min(row, len(self.entries)))
@@ -504,6 +504,13 @@ def encodable(p):
         return True
     except UnicodeEncodeError:
         return False
+
+
+def playable_alive(files):
+    """The media files whose drive or share answers within 2 s (an offline NAS must not hang a drop)."""
+    files = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+    roots = dirs_alive({os.path.splitdrive(f)[0] + "\\" for f in files}, 2.0)
+    return [f for f in files if roots[os.path.splitdrive(f)[0] + "\\"]]
 
 
 def dirs_alive(paths, seconds):
@@ -1134,7 +1141,7 @@ class Window(QMainWindow):
         if self.playlist == name:
             n = self.model.insert_paths(len(self.model.entries), files)
         else:
-            files = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+            files = playable_alive(files)
             path = playlists.path_for(name)
             n = len(files)
             if n:
@@ -1236,7 +1243,9 @@ class Window(QMainWindow):
             self.statusBar().showMessage("A copy is already running", 4000)
             return None
         try:
-            paths = [playlists.local_path(p) or p for p in playlists.read(playlists.path_for(name))]   # links count as missing
+            lines = playlists.read(playlists.path_for(name))
+            paths = [p for p in map(playlists.resolve, lines) if p]
+            links = len(lines) - len(paths)   # streams and unconvertible file: links: nothing to copy
         except OSError as e:
             self.statusBar().showMessage(f"Can't read {name}: {e.strerror or e}", 8000)
             return None
@@ -1255,6 +1264,7 @@ class Window(QMainWindow):
         finally:
             self.copying = False
         copied, missing, failed = res.get("r", (0, 0, len(paths)))
+        missing += links
         msg = f"Copied {copied} file(s) to {dest}"
         if missing:
             msg += f", {missing} missing"
