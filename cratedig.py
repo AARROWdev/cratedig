@@ -331,8 +331,9 @@ class DirModel(QAbstractTableModel):
         self.insert_paths(row, files)
         return False   # added; but report "not dropped" so no drag source ever treats it as a move
 
-    def insert_paths(self, row, files):
-        files = [f for f in playable_alive(files) if os.path.isfile(f)]
+    def insert_paths(self, row, files, checked=False):
+        if not checked:
+            files = droppable(files)[0]
         if not files:
             return 0
         row = max(0, min(row, len(self.entries)))
@@ -506,11 +507,13 @@ def encodable(p):
         return False
 
 
-def playable_alive(files):
-    """The media files whose drive or share answers within 2 s (an offline NAS must not hang a drop)."""
-    files = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
-    roots = dirs_alive({os.path.splitdrive(f)[0] + "\\" for f in files}, 2.0)
-    return [f for f in files if roots[os.path.splitdrive(f)[0] + "\\"]]
+def droppable(files):
+    """(media files to add, how many were left out because their drive or share didn't answer in 2 s).
+    The roots are checked first with a deadline, so an offline NAS never hangs a drop."""
+    media = [f for f in files if os.path.splitext(f)[1][1:].lower() in MEDIA and encodable(f)]
+    roots = dirs_alive({os.path.splitdrive(f)[0] + "\\" for f in media}, 2.0)
+    live = [f for f in media if roots[os.path.splitdrive(f)[0] + "\\"]]
+    return [f for f in live if os.path.isfile(f)], len(media) - len(live)
 
 
 def dirs_alive(paths, seconds):
@@ -1138,10 +1141,10 @@ class Window(QMainWindow):
             self.status_timer.start()
 
     def add_to_playlist(self, name, files):
+        files, dead = droppable(files)
         if self.playlist == name:
-            n = self.model.insert_paths(len(self.model.entries), files)
+            n = self.model.insert_paths(len(self.model.entries), files, checked=True)
         else:
-            files = playable_alive(files)
             path = playlists.path_for(name)
             n = len(files)
             if n:
@@ -1150,7 +1153,9 @@ class Window(QMainWindow):
                 except OSError as e:   # never write over a playlist that couldn't be read
                     self.statusBar().showMessage(f"Couldn't add to {name}: {e.strerror or e}", 8000)
                     return 0
-        self.statusBar().showMessage(f"Added {n} to {name}" if n else "Only audio and video files can go in a playlist", 4000)
+        self.statusBar().showMessage(f"Added {n} to {name}" if n else
+                                     f"{dead} file(s) not added: drive or share not reachable" if dead else
+                                     "Only audio and video files can go in a playlist", 4000)
         return n
 
     def remove_selected(self):

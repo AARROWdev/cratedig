@@ -680,3 +680,34 @@ def test_bb2_dot_segments_and_trailing_space_not_converted():
         assert pl.local_path(bad) is None, bad
     assert pl.local_path("file:///D:/Mu.sic/a%20b.mp3") == r"D:\Mu.sic\a b.mp3"
     assert pl.resolve("http://x/a.mp3") is None and pl.resolve(r"D:\a.mp3") == r"D:\a.mp3"
+
+
+# ---------- 1.2 review pass 8 (CC1-CC2)
+
+def test_cc1_closed_playlist_drop_skips_missing_files_and_folders(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    a = os.path.join(d, "tone mp3.mp3")
+    folder = os.path.join(d, "Live Set.mp4")
+    os.mkdir(folder)
+    w.new_playlist("Closed", edit=False)
+    w.leave_playlist()
+    assert w.add_to_playlist("Closed", [os.path.join(d, "gone.mp3"), folder, a]) == 1
+    assert pl.read(pl.path_for("Closed")) == [a]
+
+
+def test_cc2_dead_share_drop_says_not_reachable(make_window, media, tmp_path, monkeypatch):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    monkeypatch.setattr(cd, "dirs_alive", lambda roots, s: {r: False for r in roots})
+    w.new_playlist("Asleep", edit=False)
+    w.leave_playlist()
+    assert w.add_to_playlist("Asleep", [r"\\nas\music\a.mp3", r"\\nas\music\b.flac"]) == 0
+    assert w.statusBar().currentMessage() == "2 file(s) not added: drive or share not reachable"
+    assert w.add_to_playlist("Asleep", [os.path.join(d, "notes.txt")]) == 0
+    assert w.statusBar().currentMessage() == "Only audio and video files can go in a playlist"
+
+
+def test_cc_unc_host_with_trailing_dot_converts():
+    assert pl.local_path("file://nas./share/a.mp3") == r"\\nas.\share\a.mp3"
+    assert pl.local_path("file://nas/share./a.mp3") is None

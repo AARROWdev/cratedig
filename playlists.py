@@ -33,7 +33,8 @@ def local_path(line):
         return None
     # no ./.. segments (they'd point at a folder or drive root) and no trailing space or dot (Windows strips
     # those, so file:///D:/a.mp3%20 would play D:\a.mp3). Checked before normpath, which collapses them.
-    if any(s in (".", "..") or s.endswith((" ", ".")) for s in local.split("/")[1:]):
+    segs = local.split("/")[3 if local.startswith("//") else 1:]   # skip the drive, or the UNC host (nas. is valid)
+    if any(s in (".", "..") or s.endswith((" ", ".")) for s in segs):
         return None
     return os.path.normpath(local)
 
