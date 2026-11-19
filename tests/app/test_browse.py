@@ -128,10 +128,10 @@ def test_access_denied_folder(make_window, tmp_path):
 @pytest.mark.big
 def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     """Row 9: a folder with 20,000 files opens in under 2 s."""
-    # 20,000 empty .mp3s: a stub probe as slow as a real ffmpeg probe (~50 ms), so lengths trickle in like
-    # they do in the app. An instant stub delivered all 20,000 results inside the timed window, a load the
-    # app never sees (it made this test measure one giant length update, not opening the folder).
+    # 20,000 empty .mp3s: first visit probes like real ffmpeg (~50 ms each, lengths trickle in); the revisit below
+    # covers the cached path, where every length is already known and arrives straight after the open
     monkeypatch.setattr(cd, "probe_duration", lambda p: time.sleep(0.05) or -1)
+    monkeypatch.setattr(cd.DurationWorker, "cache", {})
     d = str(tmp_path / "big")
     os.makedirs(d)
     for i in range(20000):
@@ -142,6 +142,26 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     h.pump(0)
     assert time.monotonic() - t < 2
     assert len(w.model.entries) == 20000
+    # cached revisit: opens in time, and the 20,000 known lengths never freeze the window for long
+    for e in w.model.entries:
+        cd.DurationWorker.cache[(e.path, e.size, e.mtime)] = 1.0
+    w.navigate(str(tmp_path))
+    h.pump(0)
+    done = []
+    w.model.durs.finished.connect(lambda g: done.append(g))
+    t = time.monotonic()
+    w.navigate(d)
+    h.pump(0)
+    assert time.monotonic() - t < 2
+    worst, end = 0.0, time.monotonic() + 30
+    while not done and time.monotonic() < end:
+        s = time.monotonic()
+        h.pump(0)
+        worst = max(worst, time.monotonic() - s)
+    assert done, "lengths never finished"
+    assert all(e.dur == 1.0 for e in w.model.entries)
+    assert worst < 0.5, worst   # each step of the length fill stays short: the window keeps responding
+    w.close()   # stops the length worker (closeEvent bumps its generation)
 
 
 def test_back_forward_up_address(make_window, tmp_path):

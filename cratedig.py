@@ -136,6 +136,9 @@ class DurationWorker(QObject):
                     batch, last = [], time.monotonic()
                     continue
             batch.append((key[0], sec))
+            if len(batch) >= 1000:   # cache hits too: a revisited 20k folder arrives in small steps, never one freeze
+                self.found.emit(gen, batch)
+                batch, last = [], time.monotonic()
         if gen == self.gen:
             if batch:
                 self.found.emit(gen, batch)
@@ -430,6 +433,7 @@ class DirModel(QAbstractTableModel):
 
 class SortProxy(QSortFilterProxyModel):
     """Folders first in either direction, then by column, ties by natural name."""
+    _m = None
 
     def setSourceModel(self, m):
         self._m = m   # lessThan runs ~150,000 times on a 20,000-file folder: no wrapper calls or dicts per compare
@@ -438,7 +442,7 @@ class SortProxy(QSortFilterProxyModel):
     def lessThan(self, left, right):
         e = self._m.entries
         a, b = e[left.row()], e[right.row()]
-        if a.is_dir is not b.is_dir:
+        if a.is_dir != b.is_dir:
             return a.is_dir == (self.sortOrder() == Qt.AscendingOrder)
         c = left.column()
         if c:
@@ -448,8 +452,10 @@ class SortProxy(QSortFilterProxyModel):
                 ka, kb = max(a.dur or 0, 0), max(b.dur or 0, 0)   # failed probe (-1) sorts with blanks
             elif c == 3:
                 ka, kb = a.size, b.size
-            else:
+            elif c == 4:
                 ka, kb = a.mtime, b.mtime
+            else:
+                ka = kb = 0
             if ka != kb:
                 return ka < kb
         return a.key < b.key
@@ -459,7 +465,7 @@ class SortProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, row, parent):
         if not self.text:
             return True
-        return self.text in self.sourceModel().entries[row].fold
+        return self.text in self._m.entries[row].fold
 
 
 def glyph(kind, color="#eef1f5", size=28):
@@ -1518,6 +1524,7 @@ class Window(QMainWindow):
         self.t_dur.setText(fmt_time(dur))
 
     def closeEvent(self, ev):
+        self.model.durs.gen += 1   # stop the length worker: no probes after the window is gone
         if self.full_hidden is not None:
             self.toggle_full()   # save the normal window, not the fullscreen one
         if self.compact_from is not None:
