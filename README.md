@@ -95,7 +95,7 @@ Click or drag anywhere on the panel to seek. Waveforms are analyzed in the backg
 Cratedig remembers your last folder, window size, column layout, volume, view and skin. It never changes, moves or deletes your media.
 
 ## Tested in a throwaway Windows
-`tests/` holds 97 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
+`tests/` holds 155 automated checks that run inside a fresh Windows Sandbox, so nothing on a real PC is touched. Test media is generated in the Sandbox with ffmpeg: 14 common audio and video types, portrait and landscape video, video without audio, corrupt and empty files.
 
 - **Installer, against the installed app:** install, Open with entries, upgrade while Cratedig is running, uninstall refused while it runs, clean uninstall (Open with entries gone, settings kept), portable zip
 - **Single instance:** five rapid launches from Windows all hand their file to the one open window
@@ -104,7 +104,7 @@ Cratedig remembers your last folder, window size, column layout, volume, view an
 - **Robustness:** a random click-and-key monkey test (4,500 steps during playback) that fails if the window stops responding for 2 seconds, folders deleted out from under the window, garbage settings
 - **Never writes to your media:** every test file is hashed before and after the whole run
 
-Release bar: every check passes **3 full runs in a row**. Getting there found 4 real bugs (Esc not clearing the filter, a bad setting crashing startup, typing `C:` opening the wrong folder, uninstall leaving a registry key). A separate AI code review then checked the code against a written spec over 4 passes and found 37 more, 14 of them serious: several files opened at once from Explorer starting several players, an `ffmpeg.exe` planted in a music folder getting run, crashes on unusual file names and dates, and the filter failing on any space. All fixed; most have a regression test.
+Release bar: every check passes **3 full runs in a row**. Getting there found 4 real bugs (Esc not clearing the filter, a bad setting crashing startup, typing `C:` opening the wrong folder, uninstall leaving a registry key). A separate AI code review then checked the code against a written spec over 4 passes and found 37 more, 14 of them serious: several files opened at once from Explorer starting several players, an `ffmpeg.exe` planted in a music folder getting run, crashes on unusual file names and dates, and the filter failing on any space. All fixed; most have a regression test. Version 1.2 (compact player, playlists) took 13 more review passes and 50 more findings, among them playlist lines from other players being rewritten on save, a freeze when dragging files from an offline network share, and a failed playlist save going unseen.
 
 ## Build
 ```
