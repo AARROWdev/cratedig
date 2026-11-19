@@ -868,3 +868,29 @@ def test_installer_open_with_covers_every_playable_type():
     iss = open(os.path.join(os.path.dirname(cd.__file__), "installer", "cratedig.iss"), encoding="utf-8").read()
     exts = set(re.search(r'#define Exts "([^"]+)"', iss).group(1).split())
     assert exts == cd.MEDIA
+
+
+def test_leaving_commits_an_open_rename_and_clears_the_highlight(make_window, media, tmp_path):
+    from PySide6.QtWidgets import QLineEdit
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("Old", edit=False)
+    it = w.pl_list.item_named("Old")
+    w.pl_list.editItem(it)
+    h.pump(50)
+    ed = w.pl_list.findChild(QLineEdit)
+    assert ed is not None
+    ed.setText("Renamed")
+    w.leave_playlist()
+    h.pump(50)
+    assert os.path.isfile(pl.path_for("Renamed")) and not os.path.exists(pl.path_for("Old"))
+
+
+def test_refresh_after_leaving_highlights_nothing(make_window, media, tmp_path):
+    d = crate(media, tmp_path)
+    w = make_window(d)
+    w.new_playlist("Gym", edit=False)
+    assert w.playlist == "Gym"
+    w.navigate(d)   # leaves the playlist
+    w.pl_list.refresh()
+    assert not w.pl_list.selectedItems() and w.pl_list.currentItem() is None

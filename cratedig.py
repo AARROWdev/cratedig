@@ -1131,9 +1131,9 @@ class Window(QMainWindow):
             return
         self.playlist = None
         self.pl_list.clearSelection()
-        self.pl_list.blockSignals(True)
-        self.pl_list.setCurrentItem(None)   # a later refresh() must not re-highlight the playlist that was left
-        self.pl_list.blockSignals(False)
+        # a later refresh() must not re-highlight the playlist that was left. Signals stay on: an open rename
+        # editor commits here, and its itemChanged is what renames the file
+        self.pl_list.setCurrentItem(None)
         self.list.setSortingEnabled(True)
         col, order = getattr(self, "folder_sort", (0, Qt.AscendingOrder))
         self.list.sortByColumn(col, order)
@@ -1326,7 +1326,7 @@ class Window(QMainWindow):
 
     def add_files_dialog(self, name=None):
         """+ on the playlist panel: browse to audio/video files and add them to the selected playlist."""
-        if name is None:   # the highlighted playlist (leaving a playlist clears the highlight but not currentItem)
+        if name is None:   # the highlighted playlist, else the open one
             sel = self.pl_list.selectedItems()
             name = sel[0].data(Qt.UserRole) if sel else self.playlist
         if not name:
