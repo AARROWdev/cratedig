@@ -148,19 +148,32 @@ def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     w.navigate(str(tmp_path))
     h.pump(0)
     done = []
-    w.model.durs.finished.connect(lambda g: done.append(g))
+    w.model.durs.finished.connect(lambda g: g == w.model.durs.gen and done.append(g))   # only the revisit's worker
     t = time.monotonic()
     w.navigate(d)
     h.pump(0)
     assert time.monotonic() - t < 2
     worst, end = 0.0, time.monotonic() + 30
-    while not done and time.monotonic() < end:
+    while (not done or w.model.dur_timer.isActive()) and time.monotonic() < end:   # finished, and applied
         s = time.monotonic()
         h.pump(0)
         worst = max(worst, time.monotonic() - s)
     assert done, "lengths never finished"
     assert all(e.dur == 1.0 for e in w.model.entries)
-    assert worst < 0.5, worst   # each step of the length fill stays short: the window keeps responding
+    assert worst < 1.0, worst   # the one length update, after the open: short, the window keeps responding
+    # sorted by Length the same update re-sorts all 20,000 rows: slower, but never a hang (spec: 5 s)
+    w.navigate(str(tmp_path))
+    h.pump(0)
+    w.list.sortByColumn(2, cd.Qt.AscendingOrder)
+    done.clear()
+    w.navigate(d)
+    h.pump(0)
+    worst, end = 0.0, time.monotonic() + 30
+    while (not done or w.model.dur_timer.isActive()) and time.monotonic() < end:
+        s = time.monotonic()
+        h.pump(0)
+        worst = max(worst, time.monotonic() - s)
+    assert done and worst < 5, worst
     w.close()   # stops the length worker (closeEvent bumps its generation)
 
 

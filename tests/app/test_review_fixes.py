@@ -43,7 +43,7 @@ def test_f22_failed_probe_not_cached(monkeypatch, tmp_path):
     assert key not in cd.DurationWorker.cache
 
 
-def test_f5_cache_hits_arrive_in_few_batches(monkeypatch):
+def test_f5_cache_hits_arrive_as_one_batch(monkeypatch):
     w = cd.DurationWorker()
     keys = [(f"k{i}.mp3", 1, 1) for i in range(5000)]
     for k in keys:
@@ -52,7 +52,7 @@ def test_f5_cache_hits_arrive_in_few_batches(monkeypatch):
     w.found.connect(lambda g, b: got.append(len(b)))
     w.gen = 1
     w.run(1, keys)
-    assert got == [1000] * 5   # never one signal per file; chunks of 1,000 so a cached 20k folder never freezes
+    assert got == [5000]
 
 
 def test_f12_isdir_within_times_out():

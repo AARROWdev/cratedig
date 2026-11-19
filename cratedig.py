@@ -136,9 +136,6 @@ class DurationWorker(QObject):
                     batch, last = [], time.monotonic()
                     continue
             batch.append((key[0], sec))
-            if len(batch) >= 1000:   # cache hits too: a revisited 20k folder arrives in small steps, never one freeze
-                self.found.emit(gen, batch)
-                batch, last = [], time.monotonic()
         if gen == self.gen:
             if batch:
                 self.found.emit(gen, batch)
@@ -221,6 +218,9 @@ class DirModel(QAbstractTableModel):
         self.grey = QColor("#7d8590")
         self.durs = DurationWorker()
         self.durs.found.connect(self.set_durations)
+        self.dur_pending = []
+        self.dur_timer = QTimer(self, singleShot=True, interval=150, timeout=self.apply_durations)
+        self.durs.finished.connect(self.flush_durations)   # connected first: lengths are applied before anyone hears 'finished'
         self.playing = None
         self.accent = QColor("#2f9bff")
         self.icons = QFileIconProvider()
@@ -364,8 +364,21 @@ class DirModel(QAbstractTableModel):
         self.edited.emit()
 
     def set_durations(self, gen, batch):
+        """Lengths are collected and applied together at most every 150 ms: a burst (a cached 20,000-file folder)
+        becomes ONE update after the folder has opened, not a stall inside the open or one re-sort per batch."""
         if gen != self.durs.gen:
             return
+        self.dur_pending.append((gen, batch))
+        if not self.dur_timer.isActive():
+            self.dur_timer.start()
+
+    def flush_durations(self, gen=None):
+        self.dur_timer.stop()
+        self.apply_durations()
+
+    def apply_durations(self):
+        pending, self.dur_pending = self.dur_pending, []
+        batch = [x for gen, b in pending if gen == self.durs.gen for x in b]   # a newer folder drops older lengths
         lo, hi = None, None
         for path, sec in batch:
             for r in self.rows.get(path, ()):
