@@ -128,7 +128,10 @@ def test_access_denied_folder(make_window, tmp_path):
 @pytest.mark.big
 def test_20000_files_no_freeze(make_window, tmp_path, monkeypatch):
     """Row 9: a folder with 20,000 files opens in under 2 s."""
-    monkeypatch.setattr(cd, "probe_duration", lambda p: -1)   # 20,000 empty .mp3s: no ffmpeg probes in the background
+    # 20,000 empty .mp3s: a stub probe as slow as a real ffmpeg probe (~50 ms), so lengths trickle in like
+    # they do in the app. An instant stub delivered all 20,000 results inside the timed window, a load the
+    # app never sees (it made this test measure one giant length update, not opening the folder).
+    monkeypatch.setattr(cd, "probe_duration", lambda p: time.sleep(0.05) or -1)
     d = str(tmp_path / "big")
     os.makedirs(d)
     for i in range(20000):

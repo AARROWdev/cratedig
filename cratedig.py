@@ -431,16 +431,27 @@ class DirModel(QAbstractTableModel):
 class SortProxy(QSortFilterProxyModel):
     """Folders first in either direction, then by column, ties by natural name."""
 
+    def setSourceModel(self, m):
+        self._m = m   # lessThan runs ~150,000 times on a 20,000-file folder: no wrapper calls or dicts per compare
+        super().setSourceModel(m)
+
     def lessThan(self, left, right):
-        m = self.sourceModel()
-        a, b = m.entries[left.row()], m.entries[right.row()]
-        if a.is_dir != b.is_dir:
+        e = self._m.entries
+        a, b = e[left.row()], e[right.row()]
+        if a.is_dir is not b.is_dir:
             return a.is_dir == (self.sortOrder() == Qt.AscendingOrder)
         c = left.column()
-        ka = {1: a.ext, 2: max(a.dur or 0, 0), 3: a.size, 4: a.mtime}.get(c)   # failed probe (-1) sorts with blanks
-        kb = {1: b.ext, 2: max(b.dur or 0, 0), 3: b.size, 4: b.mtime}.get(c)
-        if ka is not None and ka != kb:
-            return ka < kb
+        if c:
+            if c == 1:
+                ka, kb = a.ext, b.ext
+            elif c == 2:
+                ka, kb = max(a.dur or 0, 0), max(b.dur or 0, 0)   # failed probe (-1) sorts with blanks
+            elif c == 3:
+                ka, kb = a.size, b.size
+            else:
+                ka, kb = a.mtime, b.mtime
+            if ka != kb:
+                return ka < kb
         return a.key < b.key
 
     text = ""   # raw filter text, casefolded (setFilterFixedString would hand back an escaped pattern)
