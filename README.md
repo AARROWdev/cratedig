@@ -3,7 +3,7 @@
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
-      <img alt="Cratedig. Dig through your crates. A file explorer and media player in one window for Windows: the folder plays in the order you sorted it, with a waveform panel and the length of every track. Tested in a throwaway Windows Sandbox." src="docs/hero-dark.svg" width="100%">
+      <img alt="Cratedig. Dig through your crates. A file explorer and media player in one window for Windows: the folder plays in the order you sorted it, with a waveform panel, playlists and the length of every track." src="docs/hero-dark.svg" width="100%">
     </picture>
   </a>
 </p>
