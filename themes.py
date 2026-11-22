@@ -1,6 +1,7 @@
 """Cratedig skins. Each skin sets the accent family, the dark surfaces and the spectrogram colormap."""
 import numpy as np
-from PySide6.QtGui import QColor, QPalette
+
+import suite_style
 
 THEMES = {
     "Blue": dict(accent="#2f9bff", light="#7cc4ff", lighter="#d6efff", bg="#111419", base="#13161c",
@@ -44,39 +45,4 @@ def make_lut(stops):
 
 
 def apply(app, t):
-    app.setStyle("Fusion")
-    p = QPalette()
-    text = QColor("#e6e8ec")
-    p.setColor(QPalette.Window, QColor(t["mid"]))
-    p.setColor(QPalette.WindowText, text)
-    p.setColor(QPalette.Base, QColor(t["base"]))
-    p.setColor(QPalette.AlternateBase, QColor(t["alt"]))
-    p.setColor(QPalette.Text, text)
-    p.setColor(QPalette.Button, QColor(t["mid"]))
-    p.setColor(QPalette.ButtonText, text)
-    p.setColor(QPalette.ToolTipBase, QColor(t["alt"]))
-    p.setColor(QPalette.ToolTipText, text)
-    p.setColor(QPalette.Highlight, QColor(t["sel"]))
-    p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-    p.setColor(QPalette.PlaceholderText, QColor("#7d8088"))
-    app.setPalette(p)
-    a, line = t["accent"], t["line"]
-    app.setStyleSheet(f"""
-        QWidget#bar {{ background:{t['bar']}; border-top:1px solid {line}; }}
-        QTreeView {{ border:1px solid {line}; }}
-        QHeaderView::section {{ background:{t['alt']}; color:#b9bcc4; border:0; border-right:1px solid {line};
-                                padding:4px 6px; }}
-        QLineEdit {{ background:{t['base']}; border:1px solid {line}; border-radius:4px; padding:4px 6px; }}
-        QLineEdit:focus {{ border-color:{a}; }}
-        QSlider::groove:horizontal {{ height:4px; background:#33363d; border-radius:2px; }}
-        QSlider::sub-page:horizontal {{ background:{a}; border-radius:2px; }}
-        QSlider::handle:horizontal {{ background:#f2f2f2; width:12px; margin:-5px 0; border-radius:6px; }}
-        QToolButton {{ padding:3px 6px; }}
-        QToolButton:checked {{ background:{t['sel']}; border-radius:4px; }}
-        QToolButton:hover {{ background:{line}; border-radius:4px; }}
-        QPushButton#chip {{ background:{t['alt']}; border:1px solid {line}; border-radius:4px; padding:3px 10px; }}
-        QPushButton#chip:hover {{ border-color:{a}; }}
-        QSplitter::handle {{ background:{t['mid']}; }}
-        QLabel#now {{ color:{a}; font-weight:600; }}
-        QMenu::item:selected {{ background:{t['sel']}; }}
-    """)
+    suite_style.apply(app, t)
