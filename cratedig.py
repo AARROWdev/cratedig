@@ -26,7 +26,7 @@ import themes  # noqa: E402
 from waveform import MODES, Analyzer, WaveView, find_ffmpeg  # noqa: E402
 
 APP = "Cratedig"
-VERSION = "1.2"
+VERSION = "1.2.1"
 
 AUDIO = {"wav", "mp3", "flac", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus", "wma", "alac",
          "ape", "wv", "mka", "m4b", "mp2", "aifc"}
