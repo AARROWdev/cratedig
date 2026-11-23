@@ -233,3 +233,31 @@ def test_p4_name_order_matches_explorer():
     """OOS-1: the same order as Explorer (StrCmpLogicalW), checked against Explorer by the reviewer."""
     want = ["Disc.mp3", "Disc2.mp3", "Song - live.mp3", "Song.mp3", "Song2.mp3", "Song10.mp3", "Track 2.wav", "Track 10.wav"]
     assert sorted(reversed(want), key=cd.sort_key) == want
+
+
+
+# ---------------------------------------------------------------- the style is set once (a second setStyle crashes)
+def test_the_style_is_set_once_and_the_stylesheet_once_per_skin(qapp, monkeypatch):
+    import suite_style
+    import themes
+    from PySide6.QtWidgets import QApplication
+    calls = {"style": 0, "sheet": 0}
+    real_style, real_sheet = QApplication.setStyle, QApplication.setStyleSheet
+
+    def set_style(self, *a):                        # (a static method, called on the app)
+        calls["style"] += 1
+        return real_style(*a)
+
+    def set_sheet(self, *a):
+        calls["sheet"] += 1
+        return real_sheet(self, *a)
+    qapp.setStyleSheet("")                          # (no stylesheet style wrapping the one about to be replaced)
+    QApplication.setStyle("Windows")                # start from another style, as a fresh app does
+    monkeypatch.setattr(QApplication, "setStyle", set_style)
+    monkeypatch.setattr(QApplication, "setStyleSheet", set_sheet)
+    monkeypatch.setattr(suite_style, "_fusion_for", None, raising=False)
+    names = list(themes.THEMES)
+    themes.apply(qapp, themes.get(names[0]))
+    themes.apply(qapp, themes.get(names[1]))        # a different skin
+    themes.apply(qapp, themes.get(names[0]))
+    assert calls == {"style": 1, "sheet": 3}        # Fusion once; one stylesheet per skin
