@@ -261,3 +261,11 @@ def test_the_style_is_set_once_and_the_stylesheet_once_per_skin(qapp, monkeypatc
     themes.apply(qapp, themes.get(names[1]))        # a different skin
     themes.apply(qapp, themes.get(names[0]))
     assert calls == {"style": 1, "sheet": 3}        # Fusion once; one stylesheet per skin
+
+
+# ---------------------------------------------------------------- the UI tests never take the owner's screen
+def test_the_ui_tests_run_headless_off_the_sandbox(qapp):
+    import helpers
+    if helpers.IN_SANDBOX:
+        pytest.skip("the Sandbox keeps the real platform: nobody's screen is at risk there")
+    assert qapp.platformName() == "offscreen"

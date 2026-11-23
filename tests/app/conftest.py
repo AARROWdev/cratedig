@@ -16,11 +16,12 @@ for d in (os.path.join(ROOT, "build", "dist", "Cratedig", "lib"), r"C:\Program F
         os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
         break
 
-# Off the Sandbox, CRATEDIG_OFFSCREEN=1 runs the window tests invisibly (no window on the PC owner's screen,
-# no video output) for a quick check while developing. The real run is the Sandbox one.
+# Off the Sandbox, Qt always runs offscreen: tests never show a window or take the PC owner's screen, mouse or
+# keyboard. CRATEDIG_OFFSCREEN=1 also runs the window tests there (no video output) for a quick check while
+# developing. The real run is the Sandbox one, which keeps the real platform.
 OFFSCREEN = os.environ.get("CRATEDIG_OFFSCREEN") == "1"
-if OFFSCREEN:
-    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+if os.environ.get("USERNAME", "").upper() != "WDAGUTILITYACCOUNT":
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
