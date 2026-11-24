@@ -55,6 +55,11 @@ The video engine (mpv) and the waveform engine (ffmpeg) are bundled. The app isn
 - In a playlist: Remove from playlist (Delete key; the file stays on disk), Show in Explorer, Copy Full Path
 - Saved as plain `.m3u8` files in `Music\Cratedig Playlists`, so other players open them too. A file that was moved or deleted shows greyed out and is skipped.
 
+| Adding tracks to a playlist | Playing a playlist |
+|---|---|
+| ![Four tracks picked in a folder and added to the Friday warm-up playlist](docs/playlist-add.png) | ![The Friday warm-up playlist open and playing, with its waveform](docs/playlist.png) |
+
+
 ### Compact player
 While audio plays, **COMPACT** shrinks Cratedig to a small player: now playing, waveform, transport and volume. **FULL** (or Esc) brings the explorer back. It remembers the compact size, and a video brings the full window back by itself.
 

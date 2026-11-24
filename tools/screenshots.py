@@ -1,10 +1,13 @@
 r"""Makes the README screenshots (docs\*.png) from a generated demo crate, offscreen: no window opens,
-no real settings or cache are touched. Run: .venv-test\Scripts\python tools\screenshots.py"""
+no real settings, cache or playlists are touched. Run: .venv-test\Scripts\python tools\screenshots.py
+Only the playlist shots: .venv-test\Scripts\python tools\screenshots.py playlists (main, other: the first three)."""
 import os
 import subprocess
 import sys
 import tempfile
 import time
+
+WHICH = sys.argv[1] if len(sys.argv) > 1 else "all"   # all, main or playlists
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TMP = tempfile.mkdtemp(prefix="cratedig-shots-")
@@ -53,6 +56,79 @@ def pump(ms):
     loop.exec()
 
 
+def open_window(skin):
+    themes.apply(QApplication.instance(), themes.get(skin))
+    w = cd.Window(CRATE)
+    w.set_skin(skin)
+    w.resize(1280, 760)
+    w.show()
+    w.hsplit.setSizes([250, 1030])
+    w.tree.setRootIndex(w.fs.index(DRIVE + "\\"))   # only the demo drive in the folder tree
+    w.tree.expandAll()
+    w.list.header().resizeSection(0, 330)
+    pump(1500)   # lengths fill in
+    return w
+
+
+def playlist_shots(app, out):
+    """Making a playlist (files picked in the folder and added to it) and playing one. Playlists live in the temporary
+    folder, never in Music."""
+    import playlists
+    playlists.DIR = os.path.join(TMP, "playlists")
+    os.makedirs(playlists.DIR, exist_ok=True)
+
+    def p(i):
+        return os.path.join(CRATE, TRACKS[i][0])
+
+    # two finished playlists are already there, and an empty one is about to be filled
+    playlists.write(playlists.path_for("Late night"), [p(i) for i in (1, 8, 6, 11)])
+    playlists.write(playlists.path_for("Rooftop warm-up"), [p(i) for i in (5, 10, 3)])
+    playlists.write(playlists.path_for("Friday warm-up"), [])
+
+    # 1. making one: four tracks picked in the folder, added to the playlist
+    w = open_window("Blue")
+    w.pl_list.refresh()
+    sm = w.list.selectionModel()
+    sm.clearSelection()   # nothing but the four picks is highlighted
+    from PySide6.QtCore import QItemSelectionModel
+    picks = (0, 2, 4, 7)
+    for n, i in enumerate(picks):
+        row = next(r for r in range(w.proxy.rowCount()) if w.entry_at(w.proxy.index(r, 0)).path == p(i))
+        sm.select(w.proxy.index(row, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    sm.setCurrentIndex(w.proxy.index(next(r for r in range(w.proxy.rowCount())
+                                          if w.entry_at(w.proxy.index(r, 0)).path == p(picks[0])), 0),
+                       QItemSelectionModel.NoUpdate)   # the focus row, without throwing the picked rows away
+    w.add_to_playlist("Friday warm-up", [p(i) for i in picks])
+    w.pl_list.refresh()
+    pump(300)
+    w.grab().save(os.path.join(out, "playlist-add.png"))
+    print("saved playlist-add.png")
+    w.close()
+    pump(300)
+
+    # 2. playing one: the playlist open, its first track playing with the waveform
+    w = open_window("Blue")
+    w.pl_list.refresh()
+    w.open_playlist("Friday warm-up")
+    pump(500)
+    w.play_view(None)
+    cache = os.path.join(os.environ["LOCALAPPDATA"], "Cratedig", "cache")
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 60:
+        pump(200)
+        if os.path.isdir(cache) and any(f.endswith(".npz") and os.path.getsize(os.path.join(cache, f)) for f in os.listdir(cache)):
+            break
+    pump(1000)
+    w.seek_to(TRACKS[0][1] * 0.35)
+    pump(2500)
+    w.list.setCurrentIndex(w.proxy.index(1, 0))
+    pump(300)
+    w.grab().save(os.path.join(out, "playlist.png"))
+    print("saved playlist.png")
+    w.close()
+    pump(300)
+
+
 def main():
     os.makedirs(os.path.join(TMP, "drive"))
     subprocess.run(["subst", DRIVE, os.path.join(TMP, "drive")], check=True)
@@ -78,6 +154,10 @@ def shots():
     from PySide6.QtGui import QFont
     app.setFont(QFont("Segoe UI", 9))   # what Windows gives the real window; offscreen would pick any font
     out = os.path.join(ROOT, "docs")
+    if WHICH in ("all", "playlists"):
+        playlist_shots(app, out)
+    if WHICH == "playlists":
+        return
     done = []
     for skin, mode, track, at, fname in (("Blue", "Classic", 2, 0.30, "main.png"),
                                          ("Ember", "Spectrogram", 6, 0.55, "spectrogram.png"),
